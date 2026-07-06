@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.DS_Store
+scratch/
+.venv/
+node_modules/
+package-lock.json
+tools/gen/
+
+# Rust
+/target
+
+# SketchUp backup saves
+*~.skp

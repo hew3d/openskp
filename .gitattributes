@@ -1,0 +1,5 @@
+*.skp binary
+*.jpg binary
+*.png binary
+*.dae -text
+Cargo.lock -diff
