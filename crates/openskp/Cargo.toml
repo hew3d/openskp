@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords = ["sketchup", "skp", "cad", "parser"]
+categories = ["parser-implementations"]
+exclude = ["tests/", "examples/"]
 
 # The core library has ZERO runtime dependencies by design, so it drops
 # cleanly into any build. Test-only deps live under dev-dependencies.
