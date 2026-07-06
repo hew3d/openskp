@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/openskp",
     "crates/openskp-cli",
+    "crates/openskp-capi",
 ]
 
 [workspace.package]

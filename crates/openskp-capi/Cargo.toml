@@ -1,0 +1,15 @@
+[package]
+name = "openskp-capi"
+description = "C ABI bindings for the openskp SketchUp .skp reader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "openskp"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+openskp = { path = "../openskp" }
