@@ -1,0 +1,17 @@
+Edges	72074
+Faces	27594
+Component Instances	497
+Guides	0
+Guide Points	0
+Groups	920
+Images	0
+3d Polylines	0
+Section Planes	0
+Dimensions	0
+Text	0
+Classification Types	0
+Classified Entities	0
+Component Definitions	149
+Layers	94
+Materials	81
+Styles	1
