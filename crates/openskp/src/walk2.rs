@@ -110,6 +110,18 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
     let ctx = crate::ctx::Ctx::of(d);
 
     let base = calibrate(d, decl, &ctx)?;
+    // Each pre-model slot is a serialized object occupying at least one byte,
+    // so a legitimate base cannot exceed the file length. Reject an
+    // implausible base before pre-padding the map with it (a crafted
+    // default-layer pointer could otherwise force a huge placeholder
+    // allocation) — the legacy path serves the file instead.
+    if base >= d.len() {
+        return Err(WalkFail {
+            stage: "calibration",
+            at: decl,
+            detail: format!("implausible pre-model base {base} (file is {} bytes)", d.len()),
+        });
+    }
 
     // ---- the real walk, map pre-padded to the calibrated base ----
     let mut ar = CArchive::new_continuous(d, decl, base);
@@ -165,7 +177,7 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
             detail: format!("implausible definition count {ndef}"),
         });
     }
-    let mut defs: Vec<DefSpan> = Vec::with_capacity(ndef);
+    let mut defs: Vec<DefSpan> = Vec::with_capacity(ndef.min(4096));
     for _ in 0..ndef {
         let start = ar.pos;
         match ar.read_object() {
@@ -229,7 +241,7 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
         });
     }
     let root_slot_floor = ar.map.len();
-    let mut roots = Vec::with_capacity(rcount);
+    let mut roots = Vec::with_capacity(rcount.min(4096));
     for _ in 0..rcount {
         match ar.read_object() {
             Ok(c) => roots.push(c),

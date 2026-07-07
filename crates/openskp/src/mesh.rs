@@ -190,7 +190,9 @@ pub(crate) fn build(map: &[Slot], base: Option<i64>) -> Mesh {
 pub(crate) fn build_range(map: &[Slot], base: Option<i64>, lo: usize, hi: usize) -> Mesh {
     let deref = |c: &Child| -> Option<usize> {
         match c {
-            Child::Obj(i) => Some(*i),
+            // Bounds-checked so every `map[deref(..)?]` below is panic-free
+            // even if a Child ever carried an out-of-range object index.
+            Child::Obj(i) => (*i < map.len()).then_some(*i),
             Child::Ref(r) => {
                 let j = *r as i64 - base?;
                 let idx = usize::try_from(j).ok()? + 1;
@@ -352,9 +354,12 @@ pub(crate) fn build_range(map: &[Slot], base: Option<i64>, lo: usize, hi: usize)
             .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| {
+                // Vertex coordinates are raw file f64s and may be NaN (a
+                // crafted or degenerate file), which makes area2 NaN and
+                // partial_cmp None — treat that as equal rather than panic.
                 area2(a, &mesh.vertices)
                     .partial_cmp(&area2(b, &mesh.vertices))
-                    .unwrap()
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, _)| i)
             .unwrap();

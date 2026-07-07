@@ -476,7 +476,12 @@ fn r_cface(ar: &mut CArchive) -> Result<Entity, Stall> {
         *slot = ar.f8()?; // A,B,C,D (unit normal + offset)
     }
     let count = ar.u4()? as usize;
-    let mut loops = Vec::with_capacity(count);
+    // The loop count is an untrusted u32: pre-reserving `count` slots would
+    // let a crafted face (count 0xFFFFFFFF) demand a multi-gigabyte
+    // allocation before a single loop is read. Cap the reservation (a real
+    // face has a handful of loops); the loop still reads `count` elements and
+    // stalls naturally at EOF on a truncated/hostile stream.
+    let mut loops = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
         loops.push(ar.read_object()?);
     }
@@ -973,4 +978,30 @@ fn r_crelationship(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     ar.take(4)?; // u32 value
     Ok(Entity::Relationship { pid })
+}
+
+#[cfg(test)]
+mod alloc_dos_tests {
+    use crate::carchive::CArchive;
+
+    /// A `CFace` whose declared loop count is `0xFFFFFFFF` must STALL on the
+    /// truncated stream, not attempt a multi-gigabyte reservation. Before the
+    /// `count.min(4096)` cap this called `Vec::with_capacity(4.29e9)` and
+    /// aborted the process on the allocation.
+    #[test]
+    fn hostile_face_loop_count_stalls_without_giant_alloc() {
+        // FF FF <schema=3> <namelen=5> "CFace"
+        let mut d = vec![0xFF, 0xFF, 3, 0, 5, 0];
+        d.extend_from_slice(b"CFace");
+        // body: preamble (00 00 lead + mask 00) + 10B drawbase + 4×f64 plane
+        d.extend_from_slice(&[0, 0, 0]);
+        d.extend_from_slice(&[0u8; 10]);
+        d.extend_from_slice(&[0u8; 32]);
+        // loop count = u32::MAX, then the stream ends
+        d.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+
+        let mut ar = CArchive::new(&d, 0);
+        // Must return Err (a stall at EOF), reached without a huge allocation.
+        assert!(ar.read_object().is_err());
+    }
 }
