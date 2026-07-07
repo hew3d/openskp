@@ -88,7 +88,8 @@ fn entity_lists_are_structurally_framed() {
 #[test]
 fn unframed_surviving_runs_are_always_recorded() {
     for entry in
-        std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/2017")).unwrap()
+        std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/2017"))
+            .unwrap()
     {
         let path = entry.unwrap().path();
         if path.extension().and_then(|e| e.to_str()) != Some("skp") {

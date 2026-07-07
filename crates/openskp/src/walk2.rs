@@ -119,7 +119,10 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
         return Err(WalkFail {
             stage: "calibration",
             at: decl,
-            detail: format!("implausible pre-model base {base} (file is {} bytes)", d.len()),
+            detail: format!(
+                "implausible pre-model base {base} (file is {} bytes)",
+                d.len()
+            ),
         });
     }
 

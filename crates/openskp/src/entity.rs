@@ -217,10 +217,16 @@ pub enum Entity {
         pid: u32,
         members: u32,
     },
-    /// A definition-tail relationship record — schema 0 (§4s addendum:
-    /// theater-2017 "Group#119" tail @0x57eec4): preamble + u32.
+    /// A definition-tail relationship record — schema 0 (§4s addendum,
+    /// REVISED on guest-house @0x1d18c1e; see [`r_crelationship`]): the
+    /// def's provenance block (GUID + name + description + source path +
+    /// timestamp) plus two object pointers.
     Relationship {
         pid: u32,
+        guid: String,
+        name: String,
+        desc: String,
+        timestamp: u32,
     },
     /// Placeholder registered before a body is read, and the value left for a
     /// class we can decode a tag for but have no body reader (a stall point).
@@ -514,19 +520,43 @@ fn r_cskfont(ar: &mut CArchive) -> Result<Entity, Stall> {
     Ok(Entity::Font { name })
 }
 
-/// `CDimensionLinear` schema 6 (SKP_FORMAT §4k): preamble + 10-byte drawbase
-/// (matref binds the dimension's material) + text-override string + font
-/// object (inline or back-ref) + 165-byte fixed tail. The tail's two
-/// anchor back-ref WORDS reference already-serialized geometry and consume
-/// no map slots, so fixed-length consumption keeps the shared index exact.
-/// (An interim 166 reading double-counted the CSkFont's 15th byte — see
-/// `r_cskfont`; back-ref-font dims pin the tail at 165 exactly.)
+/// `CDimensionLinear` schema 6 (SKP_FORMAT §4k, tail DECODED on
+/// guest-house, byte-identical to the old fixed-165 reading on the
+/// corpus): preamble + 10-byte drawbase (matref binds the dimension's
+/// material) + text-override string + font object (inline or back-ref) +
+/// u32 flags + TWO ANCHOR BLOCKS (`u32(2) u32(4) 3×f64 point +
+/// entity OBJECT POINTER + u16 + u32 ref-count + count × object pointers
+/// + u32(0)`) + 6×f64 2D basis + u32 + 2×f64 (offset, reserved) + u32.
+/// The pointers are back-ref words on the corpus (no map slots) but
+/// escalate through `7F FF` + u32 on giant maps (guest-house dims
+/// @0x3671f3b carry 3-ref anchor lists with escalated pointers), which is
+/// why the fixed-length reading desynced there.
 fn r_cdimensionlinear(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     ar.take(10)?; // drawbase (matref u16 + flags)
     let _text_override = ar.utf16()?;
     let _font = ar.read_object()?;
-    ar.take(165)?; // fixed tail (anchors as back-ref words + placement)
+    ar.take(1)?; // u8 after the font object (present for inline AND
+                 // back-ref fonts — guest-house dim #2 pins it outside
+                 // the CSkFont record)
+    ar.take(4)?; // u32 flags
+    for _ in 0..2 {
+        ar.take(32)?; // u32(2) + u32(4) + 3×f64 anchor point
+        ar.read_object()?; // anchor entity pointer
+        ar.take(2)?; // u16
+        let n = ar.u4()? as usize;
+        if n > 64 {
+            return Err(Stall::new("<dim anchor refs>", ar.pos, ar.map.len()));
+        }
+        for _ in 0..n {
+            ar.read_object()?; // style/axis object pointers
+        }
+        ar.take(4)?; // trailing u32 (0)
+    }
+    ar.take(48)?; // 6×f64 2D basis
+    ar.take(4)?; // u32
+    ar.take(16)?; // 2×f64 (dimension offset, reserved)
+    ar.take(4)?; // u32
     Ok(Entity::Dimension { pid })
 }
 
@@ -588,16 +618,26 @@ fn r_cconstructionpoint(ar: &mut CArchive) -> Result<Entity, Stall> {
     Ok(Entity::ConstructionPoint { pid, point_in })
 }
 
-/// `CImage` schema 1 (SKP_FORMAT §4l, candidate extent): preamble, drawbase,
-/// a 106-byte placement block (inch-per-pixel f64s plus unit diagonals),
-/// a utf16 source path (empty in the corpus instance), a 16-byte GUID and
-/// a u32. Pixel data is NOT inline (it lives with the embedded CDibs).
+/// `CImage` schema 1 (SKP_FORMAT §4l, revised on guest-house): preamble,
+/// drawbase(10), a LAYER OBJECT POINTER (a plain back-ref word in the
+/// corpus instance — `17 00`; the `7F FF` + u32 big-object escape on giant
+/// maps — guest-house @0x1d18aff), a 13×f64 placement block
+/// (inch-per-pixel scale plus pose, instance-transform-shaped), a utf16
+/// source path (empty in all three pinned instances) and a 16-byte GUID —
+/// NOTHING after the GUID: house-plus's next entity's new-class record
+/// starts immediately behind it. The old "106-byte block + GUID + u32"
+/// reading had fused the short pointer form into the block, desynced
+/// 4 bytes on the escaped form (guest-house @0x1d18aff) and swallowed the
+/// first 4 bytes of the FOLLOWING record as a phantom u32 (harmless only
+/// when the image was the last root entity, as in image.skp). Pixel data
+/// is NOT inline (it lives with the embedded CDibs).
 fn r_cimage(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     ar.take(10)?; // drawbase
-    ar.take(106)?; // placement/transform block (fields TBD)
+    let _layer = ar.read_object()?; // layer pointer (escalates on big maps)
+    ar.take(104)?; // 13×f64 placement block
     let _path = ar.utf16()?;
-    ar.take(20)?; // GUID + u32
+    ar.take(16)?; // GUID
     Ok(Entity::Image { pid })
 }
 
@@ -737,16 +777,44 @@ fn r_ccomponentdefinition(ar: &mut CArchive) -> Result<Entity, Stall> {
     if nrel > 4096 {
         return Err(Stall::new("<def relationships>", ar.pos, ar.map.len()));
     }
+    // A relationship duplicates the def's provenance block (GUID + name +
+    // desc + timestamp); keep the last one as the fallback metadata source.
+    let mut rel_meta: Option<(String, String, String, u32)> = None;
     for _ in 0..nrel {
-        ar.read_object()?;
+        if let Child::Obj(i) = ar.read_object()? {
+            if let crate::carchive::Slot::Object(Entity::Relationship {
+                guid,
+                name,
+                desc,
+                timestamp,
+                ..
+            }) = &ar.map[i]
+            {
+                rel_meta = Some((guid.clone(), name.clone(), desc.clone(), *timestamp));
+            }
+        }
     }
     ar.take(2)?; // u16
-    let guid_bytes = ar.take(16)?;
-    let guid: String = guid_bytes.iter().map(|b| format!("{b:02x}")).collect();
-    let name = ar.utf16()?;
-    let desc = ar.utf16()?;
-    ar.utf16()?;
-    let timestamp = ar.u4()?;
+                 // The def's own provenance block is OPTIONAL when a relationship
+                 // carries it (theater "Group#119", guest-house library components):
+                 // present iff the name-string marker sits right behind the 16-byte
+                 // GUID slot. Absent, the metadata comes from the relationship and the
+                 // stream continues straight into the (unpinned) midtail.
+    let own_tail =
+        ar.d.get(ar.pos + 16..ar.pos + 19)
+            .is_some_and(|w| w == b"\xff\xfe\xff");
+    let (guid, name, desc, timestamp) = match rel_meta {
+        Some(meta) if !own_tail => meta,
+        _ => {
+            let guid_bytes = ar.take(16)?;
+            let guid: String = guid_bytes.iter().map(|b| format!("{b:02x}")).collect();
+            let name = ar.utf16()?;
+            let desc = ar.utf16()?;
+            ar.utf16()?;
+            let timestamp = ar.u4()?;
+            (guid, name, desc, timestamp)
+        }
+    };
     // Midtail: scan for the thumbnail structurally (§4s: the block between
     // the timestamp and the thumbnail varies 42–47 bytes and is not pinned).
     let p = ar.pos;
@@ -832,9 +900,13 @@ fn r_cattributecontainer(ar: &mut CArchive) -> Result<Entity, Stall> {
 
 /// Consume one typed attribute value (§4s): 0x00 nil (ZERO value bytes —
 /// theater-2017 dynamic-component dicts), 0x04 i32, 0x06 f64, 0x07
-/// bool(u8), 0x0a utf16, 0x0b typed array (`u32 count + element-type:u8 +
-/// count values`, recursive — theater-2017 "UserIdsKey"-style lists). An
-/// unknown type stalls loudly (the walk must not guess a span).
+/// bool(u8), 0x0a utf16, 0x0b typed array (`u32 count + count ×
+/// (element-type:u8 + value)`, recursive — each element carries its OWN
+/// type byte: guest-house "CWSVelocities" is 10 × (0x06 + f64), and the
+/// theater-2017 "UserIdsKey"-style single-element lists that pinned the
+/// old "one shared element type" reading are byte-identical either way at
+/// count 1). An unknown type stalls loudly (the walk must not guess a
+/// span).
 fn attr_value(ar: &mut CArchive, t: u8, depth: u32) -> Result<(), Stall> {
     match t {
         0x00 => {} // nil: no value bytes
@@ -850,13 +922,18 @@ fn attr_value(ar: &mut CArchive, t: u8, depth: u32) -> Result<(), Stall> {
         0x0a => {
             ar.utf16()?;
         }
+        // 8-byte scalar (guest-house "2Dtools" dict, key "z" — an f64-like
+        // coordinate; span pinned by the empty-key terminator right behind).
+        0x0c => {
+            ar.take(8)?;
+        }
         0x0b => {
             let n = ar.u4()? as usize;
-            let et = ar.u1()?;
             if n > 1_000_000 || depth > 8 {
                 return Err(Stall::new("<attr array bounds>", ar.pos, ar.map.len()));
             }
             for _ in 0..n {
+                let et = ar.u1()?;
                 attr_value(ar, et, depth + 1)?;
             }
         }
@@ -940,8 +1017,11 @@ fn r_cfacetexturecoords(ar: &mut CArchive) -> Result<Entity, Stall> {
 
 /// `CConstructionLine` schema 1 (guide.skp @0x11b63, §4l single-instance
 /// rules): preamble + drawbase(10) + 8×f64 (point, unit direction, the
-/// two line-parameter bounds — ±1e30 on an infinite guide) + 7B tail
-/// (zeros observed, TBD). The §4l root tail resumes byte-exactly after.
+/// two line-parameter bounds — ±1e30 on an infinite guide) + 4B tail.
+/// The old 7-byte tail was pinned on guide.skp, whose guide sits in a
+/// zero run the extra bytes hid in; guest-house's mid-definition guides
+/// (@0x3623ea4) put the NEXT record's class-ref hard behind the record
+/// and pin the tail to exactly 4.
 fn r_cconstructionline(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     ar.take(10)?; // drawbase (§4q)
@@ -949,7 +1029,7 @@ fn r_cconstructionline(ar: &mut CArchive) -> Result<Entity, Stall> {
     for slot in v.iter_mut() {
         *slot = ar.f8()?;
     }
-    ar.take(7)?; // tail (zeros observed, TBD)
+    ar.take(4)?; // tail (zeros observed)
     Ok(Entity::ConstructionLine {
         pid,
         point_in: [v[0], v[1], v[2]],
@@ -971,13 +1051,34 @@ fn r_ccurve(ar: &mut CArchive) -> Result<Entity, Stall> {
     Ok(Entity::Curve { pid, members })
 }
 
-/// `CRelationship` schema 0 (§4s addendum; theater-2017 def tails, e.g.
-/// "Group#119" @0x57eec4: `00 00 00` preamble + u32 0x27ac353e): preamble
-/// + u32.
+/// `CRelationship` schema 0 (§4s addendum, REVISED on guest-house
+/// @0x1d18c1e): preamble + TWO OBJECT POINTERS (short back-ref words on
+/// theater — the old reading's "u32 0x27ac353e" was really `3e 35` +
+/// `ac 27`, byte-identical; the `7F FF` + u32 big-object escape on giant
+/// maps) + u16 + GUID(16) + name + desc + source path + u32 UNIX
+/// timestamp. The record mirrors the definition tail's provenance block —
+/// theater's "Group#119" def name had in fact been read out of ITS
+/// relationship by the old frame-shifted tail (the structural thumbnail
+/// scan absorbed the drift); [`r_ccomponentdefinition`] now takes the
+/// def metadata from here when the def's own tail block is absent.
 fn r_crelationship(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
-    ar.take(4)?; // u32 value
-    Ok(Entity::Relationship { pid })
+    ar.read_object()?; // object pointer A
+    ar.read_object()?; // object pointer B
+    ar.take(2)?; // u16
+    let guid_bytes = ar.take(16)?;
+    let guid: String = guid_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let name = ar.utf16()?;
+    let desc = ar.utf16()?;
+    ar.utf16()?; // source path (library provenance)
+    let timestamp = ar.u4()?;
+    Ok(Entity::Relationship {
+        pid,
+        guid,
+        name,
+        desc,
+        timestamp,
+    })
 }
 
 #[cfg(test)]

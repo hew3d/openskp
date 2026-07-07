@@ -212,7 +212,10 @@ fn parse_dae(name: &str) -> Dae {
                 if attr(&ih, "semantic") == Some("POSITION") {
                     vpos.insert(
                         attr(&vh, "id").unwrap().to_string(),
-                        attr(&ih, "source").unwrap().trim_start_matches('#').to_string(),
+                        attr(&ih, "source")
+                            .unwrap()
+                            .trim_start_matches('#')
+                            .to_string(),
                     );
                 }
             }
@@ -284,11 +287,7 @@ fn parse_dae(name: &str) -> Dae {
     }
 
     // effects: diffuse colours
-    let defaults: [[u8; 4]; 3] = [
-        [255, 255, 255, 255],
-        [164, 178, 187, 255],
-        [0, 0, 0, 255],
-    ];
+    let defaults: [[u8; 4]; 3] = [[255, 255, 255, 255], [164, 178, 187, 255], [0, 0, 0, 255]];
     let mut diffuse = Vec::new();
     for (_, eb) in blocks(&doc, "effect") {
         for (_, db) in blocks(&eb, "diffuse") {
@@ -355,7 +354,9 @@ fn parse_dae(name: &str) -> Dae {
         while let Some(i) = own[from..].find("<instance_geometry") {
             let start = from + i;
             let tag_end = own[start..].find('>').unwrap() + start;
-            let url = attr(&own[start..tag_end], "url").unwrap().trim_start_matches('#');
+            let url = attr(&own[start..tag_end], "url")
+                .unwrap()
+                .trim_start_matches('#');
             out.push((world, url.to_string()));
             from = tag_end;
         }
@@ -363,7 +364,9 @@ fn parse_dae(name: &str) -> Dae {
         while let Some(i) = own[from..].find("<instance_node") {
             let start = from + i;
             let tag_end = own[start..].find("/>").unwrap() + start;
-            let url = attr(&own[start..tag_end], "url").unwrap().trim_start_matches('#');
+            let url = attr(&own[start..tag_end], "url")
+                .unwrap()
+                .trim_start_matches('#');
             walk(&lib[url].1, &world, lib, unit, out);
             from = tag_end;
         }
@@ -602,7 +605,11 @@ fn house_scene_roots_match_dae_nodes() {
         .filter(|n| !n.is_empty())
         .map(|n| n.replace(' ', "_"))
         .collect();
-    for n in dae.root_names.iter().filter(|n| !n.starts_with("instance_")) {
+    for n in dae
+        .root_names
+        .iter()
+        .filter(|n| !n.starts_with("instance_"))
+    {
         assert!(ours.contains(n.as_str()), "dae root {n:?} missing from skp");
     }
 }
@@ -720,13 +727,15 @@ fn house_plus_geometry_equals_house() {
     let b = our_world_mesh(&base, &snap);
     let a = our_world_mesh(&plus, &snap);
     assert_eq!(
-        a.verts, b.verts,
+        a.verts,
+        b.verts,
         "house-plus world vertices differ from house ({} vs {})",
         a.verts.len(),
         b.verts.len()
     );
     assert_eq!(
-        a.rings, b.rings,
+        a.rings,
+        b.rings,
         "house-plus world face rings differ from house ({} vs {})",
         a.rings.len(),
         b.rings.len()

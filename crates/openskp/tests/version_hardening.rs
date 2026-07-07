@@ -77,9 +77,9 @@ fn pre_2017_versions_parse_with_diagnosed_degradation() {
         assert_eq!(m.version, version, "{file}");
         // Extractors keep working at header/record level.
         assert!(
-            m.materials
-                .iter()
-                .any(|mat| matches!(mat, openskp::Material::Solid { name, .. } if name == "Default")),
+            m.materials.iter().any(
+                |mat| matches!(mat, openskp::Material::Solid { name, .. } if name == "Default")
+            ),
             "{file}: Default material extracted"
         );
         assert!(

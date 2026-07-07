@@ -69,9 +69,10 @@ fn eq(a: &Value, b: &Value, path: &str) -> Result<(), String> {
 #[test]
 fn matches_python_reference() {
     let root = root();
-    let oracle: Value =
-        serde_json::from_slice(&std::fs::read(root.join("crates/openskp/tests/oracle.json")).unwrap())
-            .unwrap();
+    let oracle: Value = serde_json::from_slice(
+        &std::fs::read(root.join("crates/openskp/tests/oracle.json")).unwrap(),
+    )
+    .unwrap();
     let oracle = oracle.as_object().unwrap();
 
     let mut failures = Vec::new();

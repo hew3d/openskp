@@ -194,7 +194,10 @@ fn parse_dae(name: &str) -> Dae {
                 if attr(&ih, "semantic") == Some("POSITION") {
                     vpos.insert(
                         attr(&vh, "id").unwrap().to_string(),
-                        attr(&ih, "source").unwrap().trim_start_matches('#').to_string(),
+                        attr(&ih, "source")
+                            .unwrap()
+                            .trim_start_matches('#')
+                            .to_string(),
                     );
                 }
             }
@@ -295,11 +298,7 @@ fn parse_dae(name: &str) -> Dae {
         geoms.insert(gid, g);
     }
 
-    let defaults: [[u8; 4]; 3] = [
-        [255, 255, 255, 255],
-        [164, 178, 187, 255],
-        [0, 0, 0, 255],
-    ];
+    let defaults: [[u8; 4]; 3] = [[255, 255, 255, 255], [164, 178, 187, 255], [0, 0, 0, 255]];
     let mut diffuse = Vec::new();
     for (_, eb) in blocks(&doc, "effect") {
         for (_, db) in blocks(&eb, "diffuse") {
@@ -364,7 +363,9 @@ fn parse_dae(name: &str) -> Dae {
         while let Some(i) = own[from..].find("<instance_geometry") {
             let start = from + i;
             let tag_end = own[start..].find('>').unwrap() + start;
-            let url = attr(&own[start..tag_end], "url").unwrap().trim_start_matches('#');
+            let url = attr(&own[start..tag_end], "url")
+                .unwrap()
+                .trim_start_matches('#');
             out.push((world, url.to_string()));
             from = tag_end;
         }
@@ -372,7 +373,9 @@ fn parse_dae(name: &str) -> Dae {
         while let Some(i) = own[from..].find("<instance_node") {
             let start = from + i;
             let tag_end = own[start..].find("/>").unwrap() + start;
-            let url = attr(&own[start..tag_end], "url").unwrap().trim_start_matches('#');
+            let url = attr(&own[start..tag_end], "url")
+                .unwrap()
+                .trim_start_matches('#');
             walk(&lib[url].1, &world, lib, unit, out);
             from = tag_end;
         }
@@ -530,7 +533,9 @@ fn theater_2017_world_equivalence() {
                 })
                 .collect();
             let c = canon_full(&r);
-            ring_src.entry(c.clone()).or_insert_with(|| (gid.clone(), ring.clone()));
+            ring_src
+                .entry(c.clone())
+                .or_insert_with(|| (gid.clone(), ring.clone()));
             dae_rings.insert(c);
         }
     }
@@ -566,10 +571,8 @@ fn theater_2017_world_equivalence() {
         }
     }
     let (mut path_diff, mut merged_hole, mut unexplained) = (0, 0, 0);
-    let all_face_sets: Vec<(BTreeSet<[i64; 3]>, usize)> = our_rings
-        .iter()
-        .map(|r| (vset(r), r.len()))
-        .collect();
+    let all_face_sets: Vec<(BTreeSet<[i64; 3]>, usize)> =
+        our_rings.iter().map(|r| (vset(r), r.len())).collect();
     for r in dae_rings.difference(&our_rings) {
         let s = vset(r);
         if our_vsets.contains(&s) {
@@ -588,7 +591,11 @@ fn theater_2017_world_equivalence() {
         }
     }
     for r in our_rings.difference(&dae_rings).take(8) {
-        println!("  only-ours ring: {} corners ({} distinct)", r.len(), vset(r).len());
+        println!(
+            "  only-ours ring: {} corners ({} distinct)",
+            r.len(),
+            vset(r).len()
+        );
     }
     println!(
         "  only-dae classified: path-diff {path_diff}, merged-hole {merged_hole}, unexplained {unexplained}"
@@ -718,7 +725,11 @@ fn theater_2017_world_equivalence() {
                         if err < best {
                             best = err;
                             let bucket = if nz.abs() > 1.0 - 1e-9 {
-                                if nz > 0.0 { "horiz+Z" } else { "horiz-Z" }
+                                if nz > 0.0 {
+                                    "horiz+Z"
+                                } else {
+                                    "horiz-Z"
+                                }
                             } else if nz.abs() < 1e-9 {
                                 "vertical"
                             } else {
@@ -732,7 +743,11 @@ fn theater_2017_world_equivalence() {
             checked += 1;
             if best < 1e-3 {
                 *census
-                    .entry((best_kind.0, best_kind.1 == openskp::Side::Front, best_kind.2))
+                    .entry((
+                        best_kind.0,
+                        best_kind.1 == openskp::Side::Front,
+                        best_kind.2,
+                    ))
                     .or_default() += 1;
             } else {
                 failed += 1;

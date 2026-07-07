@@ -553,8 +553,20 @@ impl Model {
                     .iter()
                     .map(|p| {
                         // §4q inheritance: the child's own matref wins
-                        let m = if p.material != 0 { p.material } else { material };
-                        self.node_for(p.defref, &p.transform, &world, m, p.hidden, p.layer, depth + 1)
+                        let m = if p.material != 0 {
+                            p.material
+                        } else {
+                            material
+                        };
+                        self.node_for(
+                            p.defref,
+                            &p.transform,
+                            &world,
+                            m,
+                            p.hidden,
+                            p.layer,
+                            depth + 1,
+                        )
                     })
                     .collect()
             })
@@ -663,9 +675,9 @@ impl Model {
                 .faces
                 .iter()
                 .filter(|f| {
-                    [f.front_material, f.back_material].iter().any(|m| {
-                        m.and_then(|slot| self.applied_size_of(slot)).is_some()
-                    })
+                    [f.front_material, f.back_material]
+                        .iter()
+                        .any(|m| m.and_then(|slot| self.applied_size_of(slot)).is_some())
                 })
                 .collect();
             j.arr(&textured, |j, f| {
@@ -675,8 +687,7 @@ impl Model {
                     ("uv_front", f.front_material, crate::Side::Front),
                     ("uv_back", f.back_material, crate::Side::Back),
                 ] {
-                    let Some(size) = mat.and_then(|slot| self.applied_size_of(slot))
-                    else {
+                    let Some(size) = mat.and_then(|slot| self.applied_size_of(slot)) else {
                         continue;
                     };
                     let Some(x) = f.uv_xform(side, size) else {
@@ -691,8 +702,7 @@ impl Model {
                     j.end_arr();
                 }
                 if let Some(t) = &f.texture {
-                    for (name, pins) in
-                        [("pins_front", &t.front_pins), ("pins_back", &t.back_pins)]
+                    for (name, pins) in [("pins_front", &t.front_pins), ("pins_back", &t.back_pins)]
                     {
                         if !pins.is_empty() {
                             j.key(name);

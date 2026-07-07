@@ -126,7 +126,11 @@ fn dae_textured(name: &str) -> Vec<(Vec<[f64; 3]>, Vec<[f64; 2]>)> {
             for k in 0..n {
                 let vi = p[(at + k) * stride + voff];
                 let ti = p[(at + k) * stride + toff];
-                ring.push([pos[vi * 3] * unit, pos[vi * 3 + 1] * unit, pos[vi * 3 + 2] * unit]);
+                ring.push([
+                    pos[vi * 3] * unit,
+                    pos[vi * 3 + 1] * unit,
+                    pos[vi * 3 + 2] * unit,
+                ]);
                 ring_uv.push([uvs[ti * 2], uvs[ti * 2 + 1]]);
             }
             at += n;
@@ -185,7 +189,10 @@ fn check(stem: &str, check_dae_uv: bool, tol: f64) -> (usize, f64) {
                     .map(|&vi| q(run.mesh.vertices[vi as usize]))
                     .collect();
                 let matches = dae.iter().filter(|(ring, _)| {
-                    ring.iter().map(|&p| q(p)).collect::<std::collections::BTreeSet<_>>() == ours
+                    ring.iter()
+                        .map(|&p| q(p))
+                        .collect::<std::collections::BTreeSet<_>>()
+                        == ours
                 });
                 for (ring, ring_uv) in matches {
                     checked += 1;
@@ -207,7 +214,10 @@ fn check(stem: &str, check_dae_uv: bool, tol: f64) -> (usize, f64) {
             }
         }
     }
-    assert!(checked > 0, "{stem}: no skp face matched a textured dae face");
+    assert!(
+        checked > 0,
+        "{stem}: no skp face matched a textured dae face"
+    );
     (checked, worst_pin)
 }
 

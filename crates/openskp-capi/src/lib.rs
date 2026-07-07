@@ -30,7 +30,11 @@ pub unsafe extern "C" fn openskp_open(path: *const c_char) -> *mut OpenSkpModel 
         Err(_) => return std::ptr::null_mut(),
     };
     match openskp::Model::read(path) {
-        Ok(model) => Box::into_raw(Box::new(OpenSkpModel { model, json: None, mesh_json: None })),
+        Ok(model) => Box::into_raw(Box::new(OpenSkpModel {
+            model,
+            json: None,
+            mesh_json: None,
+        })),
         Err(_) => std::ptr::null_mut(),
     }
 }
@@ -46,7 +50,11 @@ pub unsafe extern "C" fn openskp_parse(data: *const u8, len: usize) -> *mut Open
     }
     let bytes = std::slice::from_raw_parts(data, len);
     match openskp::Model::parse(bytes) {
-        Ok(model) => Box::into_raw(Box::new(OpenSkpModel { model, json: None, mesh_json: None })),
+        Ok(model) => Box::into_raw(Box::new(OpenSkpModel {
+            model,
+            json: None,
+            mesh_json: None,
+        })),
         Err(_) => std::ptr::null_mut(),
     }
 }
