@@ -106,10 +106,17 @@ pub fn materials(d: &[u8]) -> Vec<Material> {
         let e = end + len * 2;
         if d.get(e..e + 2) == Some(b"\x00\x00") && d.get(e + 6..e + 10) == Some(b"\xff\xfe\xff\x00")
         {
-            // solid: name + 00 00 + RGBA + empty texpath + 8B + opacity:f64
-            let opacity = match f64le(d, e + 18) {
-                Some(v) => round_to(v, 4),
-                None => continue,
+            // solid: name + 00 00 + RGBA + empty texpath + 8B +
+            // opacity:f64 + USE-OPACITY flag byte. The stored f64 is the
+            // opacity slider's last position and applies ONLY when the
+            // flag is set — materials routinely carry stale 0.0/0.5
+            // values with the flag off and render fully opaque
+            // (byte-proven against .dae diffuse-alpha ground truth across
+            // the corpus and two production models).
+            let opacity = match (f64le(d, e + 18), d.get(e + 26)) {
+                (Some(v), Some(1)) => round_to(v, 4),
+                (Some(_), Some(_)) => 1.0,
+                _ => continue,
             };
             let rgba = match d.get(e + 2..e + 6) {
                 Some(b) => [b[0], b[1], b[2], b[3]],

@@ -96,9 +96,13 @@ def materials(d):
             continue
         e = m.end() + n*2
         if d[e:e+2] == b"\x00\x00" and d[e+6:e+10] == b"\xff\xfe\xff\x00":
-            # opacity is a separate f64 (name + 00 00 + RGBA + empty texpath + 8B + f64);
-            # the RGBA 4th byte is an opaque flag, real transparency lives here.
+            # opacity is a separate f64 (name + 00 00 + RGBA + empty texpath + 8B + f64)
+            # followed by a USE-OPACITY flag byte: the f64 is the slider's last
+            # position and applies only when the flag is set (stale 0.0/0.5
+            # values with the flag off render opaque). NOT the RGBA 4th byte.
             opacity = round(struct.unpack_from("<d", d, e+18)[0], 4)
+            if d[e+26] != 1:
+                opacity = 1.0
             out.append({"name": name, "kind": "solid", "rgba": tuple(d[e+2:e+6]),
                         "opacity": opacity})
         elif d[e:e+6] == b"\x01\x00\x00\x00\x03\x80":

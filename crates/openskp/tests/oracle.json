@@ -8526,7 +8526,7 @@
    {
     "kind": "solid",
     "name": "*2",
-    "opacity": 0.5,
+    "opacity": 1.0,
     "rgba": [
      204,
      165,

@@ -88,3 +88,24 @@ fn material_one_face_links_the_texture() {
         other => panic!("expected the textured material, got {other:?}"),
     }
 }
+
+/// The stored opacity f64 applies ONLY when the use-opacity flag byte is
+/// set: attributes.skp's *2 and *4 both store 0.5, but only *4 carries the
+/// flag — SketchUp's own `.dae` export gives *2 diffuse alpha 1.0 and *4
+/// alpha 128/255. Stale slider values with the flag off must read opaque.
+#[test]
+fn opacity_applies_only_with_the_use_opacity_flag() {
+    let model = model("attributes.skp");
+    let opacity_of = |want: &str| -> f64 {
+        model
+            .materials
+            .iter()
+            .find_map(|m| match m {
+                openskp::Material::Solid { name, opacity, .. } if name == want => Some(*opacity),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("solid material {want:?}"))
+    };
+    assert_eq!(opacity_of("*2"), 1.0, "flag off: stored 0.5 reads opaque");
+    assert_eq!(opacity_of("*4"), 0.5, "flag on: stored 0.5 applies");
+}
