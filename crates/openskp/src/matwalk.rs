@@ -41,6 +41,11 @@ pub(crate) struct MatSlot {
     /// The record's name — the correlation key against the extracted
     /// material list (which can MISS records the walk finds).
     pub name: String,
+    /// The record's inline CDib slot, relative like `rel`, when it owns
+    /// one — the slot a shared-texture record's back-ref word names
+    /// (house.skp's "[Wood Floor Light]1" refs 23 = the original's dib
+    /// at rel 6 + anchor 17).
+    pub dib_rel: Option<usize>,
 }
 
 /// Walk the CMaterial region of `d`. Returns per-material relative slots,
@@ -70,6 +75,7 @@ pub(crate) fn walk_region(d: &[u8]) -> Option<Vec<MatSlot>> {
         }
         let start_rel = rel;
         rel += 1 + pending_attrs;
+        let dib_at = rel; // an inline dib takes the record's next owned slot
         let mut dibs = 0usize;
         let mut attrs = 0usize;
         let (name, np) = record(d, p, &mut dibs, &mut attrs)?;
@@ -78,6 +84,7 @@ pub(crate) fn walk_region(d: &[u8]) -> Option<Vec<MatSlot>> {
         out.push(MatSlot {
             rel: start_rel,
             name,
+            dib_rel: (dibs > 0).then_some(dib_at),
         });
         p = np;
     }
@@ -313,6 +320,25 @@ mod specs {
             assert_eq!(slots.len(), mats, "{file} material count");
             eprintln!("{file}: last rel {}", slots.last().unwrap().rel);
         }
+        // house.skp's dib layout: five inline dibs, each on the slot after
+        // its material; the shared "[Wood Floor Light]1" (rel 11) owns
+        // none — its back-ref 23 lands on rel 6 under the file's anchor 17.
+        let slots = walk_region(&corpus("house.skp")).unwrap();
+        let dibs: Vec<(usize, Option<usize>)> = slots.iter().map(|s| (s.rel, s.dib_rel)).collect();
+        assert_eq!(
+            dibs,
+            [
+                (0, None),
+                (1, Some(2)),
+                (3, None),
+                (4, None),
+                (5, Some(6)),
+                (7, Some(8)),
+                (9, Some(10)),
+                (11, None),
+                (12, Some(13)),
+            ]
+        );
     }
 
     /// The 10.7 MB production model: all 81 manager materials walk
@@ -336,14 +362,17 @@ mod specs {
             MatSlot {
                 rel: 0,
                 name: "a".into(),
+                dib_rel: Some(1),
             },
             MatSlot {
                 rel: 2,
                 name: "b".into(),
+                dib_rel: None,
             },
             MatSlot {
                 rel: 3,
                 name: "c".into(),
+                dib_rel: None,
             },
         ];
         // refs {20, 23} fit ONLY shift 20 (mat0->20, mat2->23).

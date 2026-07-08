@@ -176,7 +176,10 @@ impl Model {
         let (definitions, instances, definition_links, link_diags) =
             extract::component_tree(d, &geometry);
         diagnostics.extend(link_diags);
-        let materials = extract::materials(d);
+        // Shared-texture back-refs stay unresolved on this path: placing
+        // the referenced CDib slot needs the §4s global anchor, which the
+        // byte-scan path never establishes.
+        let (materials, _shared_refs) = extract::materials(d);
         // Phase 3.2: link face material slots to the materials list by the
         // documented relative-order rule (SKP_FORMAT §4n).
         let mut refs: Vec<u16> = geometry
@@ -465,9 +468,11 @@ impl Model {
         // Materials: content still comes from the byte-scan extractor;
         // BINDING is the §4s slot arithmetic, validated against the
         // observed matrefs (fallback = the documented §4n suffix zip).
-        let materials = extract::materials(d);
+        // The same anchor resolves shared-texture back-refs to their
+        // owning material's image bytes.
+        let (mut materials, shared_refs) = extract::materials(d);
         let (material_links, mut diagnostics) =
-            continuous_material_links(d, &materials, cw.base, &geometry);
+            continuous_material_links(d, &mut materials, &shared_refs, cw.base, &geometry);
 
         diagnostics.insert(0, Diagnostic::ContinuousWalk { base: cw.base });
         diagnostics.extend(
@@ -1035,9 +1040,18 @@ impl Model {
 /// and every observed face matref must land on a material slot. On any
 /// disagreement the documented §4n suffix alignment serves instead,
 /// recorded as `MaterialLinkFallback`.
+///
+/// The slot anchor also resolves shared-texture back-refs (§8.1): the
+/// record's u16 names the OWNING material's CDib global map slot, so once
+/// slots are placed the owner is exact and its image bytes are copied onto
+/// the sharing material (house.skp: "[Wood Floor Light]1" refs 23, the
+/// slot after "[Wood Floor Light]" at 22; the theater's four shared
+/// records land on their like-named originals' dibs the same way). The
+/// suffix fallback places no slots, so back-refs stay unresolved there.
 fn continuous_material_links(
     d: &[u8],
-    materials: &[Material],
+    materials: &mut [Material],
+    shared_refs: &[(usize, u16)],
     base: usize,
     geometry: &[GeometryRun],
 ) -> (Vec<(u16, usize)>, Vec<Diagnostic>) {
@@ -1081,8 +1095,9 @@ fn continuous_material_links(
                 }
             }
             let mut mapped: Vec<(u16, usize)> = Vec::with_capacity(links.len());
+            let mut by_walk: Vec<Option<usize>> = vec![None; slots.len()];
             let mut j = 0usize;
-            for (slot, wi) in links {
+            for &(slot, wi) in &links {
                 let want = &slots[wi].name;
                 let mut k = j;
                 while k < materials.len() && name_of(&materials[k]) != want {
@@ -1090,12 +1105,25 @@ fn continuous_material_links(
                 }
                 if k < materials.len() {
                     mapped.push((slot, k));
+                    by_walk[wi] = Some(k);
                     j = k + 1;
                 }
                 // else: the extractor missed this record; its slot links to
                 // no material (faces on it degrade to unpainted).
             }
             if !mapped.is_empty() {
+                // Anchored shared-texture resolution: back-ref slot →
+                // walked dib → owning material's bytes.
+                let shift = links[0].0 as usize - slots[links[0].1].rel;
+                for &(mi, dib_slot) in shared_refs {
+                    let owner = slots
+                        .iter()
+                        .position(|s| s.dib_rel.is_some_and(|r| r + shift == dib_slot as usize))
+                        .and_then(|wi| by_walk[wi]);
+                    if let Some(owner) = owner {
+                        adopt_shared_bytes(materials, mi, owner);
+                    }
+                }
                 return (mapped, Vec::new());
             }
         }
@@ -1122,7 +1150,19 @@ fn continuous_material_links(
         refs.iter().all(|r| slots.contains(r)).then_some(links)
     };
     match arithmetic() {
-        Some(links) => (links, Vec::new()),
+        Some(links) => {
+            // Same shared-texture resolution under the arithmetic model:
+            // a material's own dib occupies the slot right after it.
+            for &(mi, dib_slot) in shared_refs {
+                let owner = links.iter().find_map(|&(s, i)| {
+                    (own_dib[i] && s as usize + 1 == dib_slot as usize).then_some(i)
+                });
+                if let Some(owner) = owner {
+                    adopt_shared_bytes(materials, mi, owner);
+                }
+            }
+            (links, Vec::new())
+        }
         None => {
             let diag = Diagnostic::MaterialLinkFallback {
                 declared: declared.unwrap_or(0),
@@ -1140,6 +1180,26 @@ fn continuous_material_links(
             };
             (links, vec![diag])
         }
+    }
+}
+
+/// Copy the owning material's embedded image onto a shared-texture
+/// material (§8.1: its back-ref names the owner's CDib slot). A no-op
+/// unless the owner actually carries inline bytes.
+fn adopt_shared_bytes(materials: &mut [Material], shared: usize, owner: usize) {
+    if shared == owner || shared >= materials.len() {
+        return;
+    }
+    let Material::Textured {
+        image_bytes: Some(b),
+        ..
+    } = &materials[owner]
+    else {
+        return;
+    };
+    let b = b.clone();
+    if let Material::Textured { image_bytes, .. } = &mut materials[shared] {
+        *image_bytes = Some(b);
     }
 }
 

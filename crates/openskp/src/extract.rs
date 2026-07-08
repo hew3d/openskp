@@ -89,9 +89,14 @@ fn marker_name(d: &[u8], len: usize, end: usize) -> Option<String> {
 
 // ---- materials ----
 
-pub fn materials(d: &[u8]) -> Vec<Material> {
+/// All materials in file order, plus every shared-texture back-reference
+/// as `(material index, referenced CDib global map slot)` — the caller
+/// resolves those slots to owning materials once the §4s anchor is known
+/// (the byte scan alone cannot place slots globally).
+pub fn materials(d: &[u8]) -> (Vec<Material>, Vec<(usize, u16)>) {
     let n = d.len();
     let mut out = Vec::new();
+    let mut shared_refs = Vec::new();
     for (_start, len, end) in str_markers(d) {
         if len == 0 {
             continue;
@@ -222,6 +227,11 @@ pub fn materials(d: &[u8]) -> Vec<Material> {
                 let ce = chars_at + flen * 2;
                 d.get(ce..ce + 4).map(|b| [b[0], b[1], b[2], b[3]])
             });
+            // The back-ref word is the owning material's CDib global map
+            // slot; the caller copies that material's bytes here.
+            if let Some(r) = u16le(d, e + 4) {
+                shared_refs.push((out.len(), r));
+            }
             out.push(Material::Textured {
                 name,
                 texture: tex,
@@ -231,7 +241,7 @@ pub fn materials(d: &[u8]) -> Vec<Material> {
             });
         }
     }
-    out
+    (out, shared_refs)
 }
 
 /// Decode the MFC utf16 string record at exactly `off`, if one is there.

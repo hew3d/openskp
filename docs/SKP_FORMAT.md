@@ -355,9 +355,11 @@ Textured material:
 utf16 name
 u32   1                    has-texture flag
 <texture image>            EITHER an inline CDib object (class ref + body,
-                           §8.2), OR a u16 back-ref to another material's
-                           CDib — image data is deduplicated across
-                           materials sharing a texture [§4s]
+                           §8.2), OR a u16 back-ref holding the owning
+                           material's CDib GLOBAL map slot — image data is
+                           deduplicated across materials sharing a texture
+                           (house.skp: "[Wood Floor Light]1" refs 23, the
+                           slot after "[Wood Floor Light]" at 22) [§4s]
 (JPEG payloads only) u32   (values 70/99 observed; semantics unknown)
 f64 × 2                    applied texture size: width, height in inches
 utf16                      texture filename

@@ -47,6 +47,33 @@ fn material_one_face_material_image() {
     assert_eq!(&b[b.len() - 2..], &[0xff, 0xd9], "JPEG EOI");
 }
 
+/// A shared-texture record (§8.1) carries no inline CDib — its u16
+/// back-ref names the owning material's dib slot. house.skp's
+/// "[Wood Floor Light]1" refs slot 23, the dib of "[Wood Floor Light]"
+/// at slot 22; extract_images.py pins that payload as [3] jpg @0x012daa,
+/// 17984 bytes. The shared material must expose the owner's exact bytes.
+#[test]
+fn shared_texture_material_resolves_the_owners_bytes() {
+    let m = model("house.skp");
+    let bytes_of = |want: &str| {
+        m.materials
+            .iter()
+            .find_map(|mat| match mat {
+                openskp::Material::Textured {
+                    name, image_bytes, ..
+                } if name == want => Some(image_bytes.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("textured material {want:?}"))
+    };
+    let owner = bytes_of("[Wood Floor Light]").expect("owner carries inline bytes");
+    let shared = bytes_of("[Wood Floor Light]1").expect("shared back-ref resolves");
+    assert_eq!(owner.len(), 17984);
+    assert_eq!(&owner[..4], &[0xff, 0xd8, 0xff, 0xe0], "JPEG SOI + APP0");
+    assert_eq!(&owner[owner.len() - 2..], &[0xff, 0xd9], "JPEG EOI");
+    assert_eq!(shared, owner, "shared material adopts the owner's payload");
+}
+
 #[test]
 fn solid_materials_have_no_image() {
     let m = model("box-two-materials.skp");
