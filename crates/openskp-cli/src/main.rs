@@ -189,8 +189,12 @@ fn summary(path: &str, m: &openskp::Model, data: &[u8]) {
                     image_bytes: _,
                     avg_rgba: _,
                     applied_size_in,
+                    opacity,
                 } => {
-                    println!("  {name:?} textured texture={texture:?} size={applied_size_in:?}");
+                    println!(
+                        "  {name:?} textured texture={texture:?} size={applied_size_in:?} \
+                         opacity={opacity}"
+                    );
                 }
             }
         }

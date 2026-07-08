@@ -20,8 +20,8 @@
 //!   textured: 01 00 00 00 + dib(class-ref + subtype:u32 + len:u32 +
 //!             payload + optional u32) + w:f64 + h:f64 + filename + rich
 //!   shared:   01 00 00 00 + BACK-REF word + w + h + filename + rich
-//!   rich:     avg(4) + 00 + avg2(4) + emptystr + u32 + f64 + 4B
-//! tail: 1 byte + holder pointer (0000 null | XXXX back-ref | class-ref +
+//!   rich:     avg(4) + 00 + avg2(4) + emptystr + u32 + 4B + opacity:f64
+//! tail: use-opacity flag byte + holder pointer (0000 null | XXXX back-ref | class-ref +
 //!       3B body = NEW holder slot) + optional attribute objects
 //!       (class-ref + dict body, one slot each)
 //! footer: 3 bytes, then the layer-list count:u32 (cross-checked)
@@ -137,18 +137,18 @@ fn record(d: &[u8], mut p: usize, dibs: &mut usize, attrs: &mut usize) -> Option
         p += 16; // applied size w + h
         let (_fname, np) = utf16(d, p)?;
         p = np;
-        // rich tail: avg + 00 + avg2 + emptystr + u32 + f64 + 4B
+        // rich tail: avg + 00 + avg2 + emptystr + u32 + 4B + opacity f64
         p += 4 + 1 + 4;
         let (s, np) = utf16(d, p)?;
         if !s.is_empty() {
             return None;
         }
-        p = np + 4 + 8 + 4;
+        p = np + 4 + 4 + 8;
     } else {
         return None;
     }
 
-    // Common tail: 1 byte + HOLDER pointer (a new holder has a 0-byte
+    // Common tail: use-opacity flag byte + HOLDER pointer (a new holder has a 0-byte
     // body and owns one slot) + ATTRIBUTES pointer (null, or a
     // CAttributeContainer class-ref whose body is a 3-byte preamble +
     // CAttributeNamed children until a null tag — one slot for the

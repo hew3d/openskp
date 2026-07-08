@@ -742,6 +742,7 @@ impl Model {
                 // API-level only; the frozen-oracle JSON predates them
                 image_bytes: _,
                 avg_rgba: _,
+                opacity: _,
             } => {
                 j.begin_obj();
                 j.m_str("name", name);

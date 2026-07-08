@@ -346,7 +346,12 @@ u16   0         (no texture)
 4 bytes         RGBA, one byte each, in that order
 utf16           texture path (empty)
 8 bytes
-f64             opacity 0..1 (the RGBA alpha byte is an opaque flag, 0xFF)
+f64             opacity 0..1 — the opacity slider's last position; it
+                applies ONLY when the use-opacity flag is set (the RGBA
+                alpha byte is an opaque flag, 0xFF)
+1 byte          use-opacity flag: stale slider values persist with the
+                flag clear and render opaque (attributes.skp's *2 and *4
+                both store 0.5; only flag-set *4 exports as transparent)
 ```
 
 Textured material:
@@ -365,6 +370,18 @@ f64 × 2                    applied texture size: width, height in inches
 utf16                      texture filename
 4 bytes                    average color RGBA (what exporters emit as the
                            material's diffuse color)
+1 byte                     (0 observed)
+4 bytes                    second average color RGBA (near-duplicate of
+                           the first; alpha 0xFF observed)
+utf16                      (empty)
+u32                        (1 observed)
+4 bytes
+f64                        opacity 0..1 — the same stored-slider value as
+                           solids
+1 byte                     use-opacity flag, as for solids (house.skp's
+                           "[Translucent Glass Tinted]" stores 0.52
+                           flag-set, the transparency its .dae export
+                           carries; flag-clear materials read opaque)
 ```
 
 ### 8.2 CDib (schema 3)
@@ -622,8 +639,8 @@ Unknown bytes inside otherwise-exact records:
 - CConstructionLine's 7-byte tail (§10.3).
 - CDimensionLinear: the semantic fields inside the 165-byte tail (§10.1).
 - CText: the leader-variant geometry fields (§10.2).
-- Materials: the u32 after JPEG texture payloads; trailing bytes after
-  the average color (§8.1).
+- Materials: the u32 after JPEG texture payloads; the second average
+  color's role and the u32 + 4 bytes before the textured opacity (§8.1).
 - CDib subtypes other than 1 and 4, if any exist (§8.2).
 
 Candidate extents (single observed instance): CSectionPlane (and its

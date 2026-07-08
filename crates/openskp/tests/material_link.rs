@@ -109,3 +109,34 @@ fn opacity_applies_only_with_the_use_opacity_flag() {
     assert_eq!(opacity_of("*2"), 1.0, "flag off: stored 0.5 reads opaque");
     assert_eq!(opacity_of("*4"), 0.5, "flag on: stored 0.5 applies");
 }
+
+/// Textured records carry the same opacity tail as solids (§8.1):
+/// house.skp's "[Translucent Glass Tinted]" stores 0.52 with the
+/// use-opacity flag set — house.dae exports the same 0.52 as its
+/// transparent color — while every flag-off textured material, the
+/// shared-texture "[Wood Floor Light]1" included, reads opaque.
+#[test]
+fn textured_opacity_follows_the_use_opacity_flag() {
+    let model = model("house.skp");
+    let opacity_of = |want: &str| -> f64 {
+        model
+            .materials
+            .iter()
+            .find_map(|m| match m {
+                openskp::Material::Textured { name, opacity, .. } if name == want => Some(*opacity),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("textured material {want:?}"))
+    };
+    assert_eq!(
+        opacity_of("[Translucent Glass Tinted]"),
+        0.52,
+        "flag on: the stored slider value applies"
+    );
+    assert_eq!(opacity_of("[Wood Floor Light]"), 1.0, "flag off: opaque");
+    assert_eq!(
+        opacity_of("[Wood Floor Light]1"),
+        1.0,
+        "shared-texture record: same tail grammar, flag off"
+    );
+}

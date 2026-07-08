@@ -180,24 +180,27 @@ pub fn materials(d: &[u8]) -> (Vec<Material>, Vec<(usize, u16)>) {
                 (payload.starts_with(b"\x89PNG") || payload.starts_with(b"\xff\xd8\xff"))
                     .then(|| payload.to_vec())
             });
-            // §4v: the average RGBA sits right after the filename record —
-            // the colour .dae exports use as the material's diffuse.
-            let avg_rgba = u32le(d, e + 10).and_then(|ln| {
+            // End of the filename record: the rich tail (§8.1) — average
+            // colors and opacity — sits at fixed offsets from here.
+            let ce = u32le(d, e + 10).and_then(|ln| {
                 let mut je = e + 14 + ln as usize;
                 if u32le(d, e + 6) == Some(1) {
                     je += 4;
                 }
                 let fe = je + 16; // past the applied-size f64 pair
                 let (flen, chars_at) = crate::carchive::mfc_strlen(d, fe)?;
-                let ce = chars_at + flen * 2;
-                d.get(ce..ce + 4).map(|b| [b[0], b[1], b[2], b[3]])
+                Some(chars_at + flen * 2)
             });
+            // §4v: the average RGBA sits right after the filename record —
+            // the colour .dae exports use as the material's diffuse.
+            let avg_rgba = ce.and_then(|ce| d.get(ce..ce + 4).map(|b| [b[0], b[1], b[2], b[3]]));
             out.push(Material::Textured {
                 name,
                 texture: tex,
                 applied_size_in: asize,
                 image_bytes,
                 avg_rgba,
+                opacity: ce.map_or(1.0, |ce| textured_opacity(d, ce)),
             });
         } else if d.get(e..e + 4) == Some(b"\x01\x00\x00\x00")
             && d.get(e + 5).is_some_and(|&b| b & 0x80 == 0)
@@ -223,10 +226,8 @@ pub fn materials(d: &[u8]) -> (Vec<Material>, Vec<(usize, u16)>) {
             if tex.is_none() {
                 continue; // not the back-ref texture shape after all
             }
-            let avg_rgba = crate::carchive::mfc_strlen(d, fe).and_then(|(flen, chars_at)| {
-                let ce = chars_at + flen * 2;
-                d.get(ce..ce + 4).map(|b| [b[0], b[1], b[2], b[3]])
-            });
+            let ce = crate::carchive::mfc_strlen(d, fe).map(|(flen, chars_at)| chars_at + flen * 2);
+            let avg_rgba = ce.and_then(|ce| d.get(ce..ce + 4).map(|b| [b[0], b[1], b[2], b[3]]));
             // The back-ref word is the owning material's CDib global map
             // slot; the caller copies that material's bytes here.
             if let Some(r) = u16le(d, e + 4) {
@@ -238,10 +239,31 @@ pub fn materials(d: &[u8]) -> (Vec<Material>, Vec<(usize, u16)>) {
                 applied_size_in: asize,
                 image_bytes: None, // shared: bytes live on the referenced material
                 avg_rgba,
+                opacity: ce.map_or(1.0, |ce| textured_opacity(d, ce)),
             });
         }
     }
     (out, shared_refs)
+}
+
+/// Opacity from a textured record's rich tail (§8.1), `ce` = the end of
+/// the texture-filename record: average RGBA + 1 byte + second average +
+/// empty string + u32 + 4 bytes precede the opacity f64, and the
+/// use-opacity flag byte follows it. Same semantics as solids — the
+/// stored slider value applies ONLY when the flag is set (house.skp's
+/// "[Translucent Glass Tinted]" stores 0.52 flag-on, the transparency
+/// its .dae export carries; every flag-off textured material across the
+/// corpus and the theater benchmark reads opaque).
+fn textured_opacity(d: &[u8], ce: usize) -> f64 {
+    // the empty-string record anchors the fixed offsets; any other tail
+    // shape is undecoded — read opaque rather than misaligned bytes.
+    if d.get(ce + 9..ce + 13) != Some(b"\xff\xfe\xff\x00") {
+        return 1.0;
+    }
+    match (f64le(d, ce + 21), d.get(ce + 29)) {
+        (Some(v), Some(1)) => round_to(v, 4),
+        _ => 1.0,
+    }
 }
 
 /// Decode the MFC utf16 string record at exactly `off`, if one is there.

@@ -95,6 +95,12 @@ pub enum Material {
         /// API-level only, like `image_bytes` (the frozen-oracle JSON
         /// predates it).
         avg_rgba: Option<[u8; 4]>,
+        /// Effective opacity 0..1 — same stored-slider semantics as
+        /// solids: the record's f64 applies only when the use-opacity
+        /// flag byte is set, else 1.0 (house.skp's "[Translucent Glass
+        /// Tinted]" stores 0.52 flag-on, the value its `.dae` export
+        /// carries). API-level only, like `image_bytes`.
+        opacity: f64,
     },
 }
 
