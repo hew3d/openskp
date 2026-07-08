@@ -8,6 +8,7 @@ pub mod ctx;
 mod entity;
 mod extract;
 mod header;
+mod matwalk;
 mod mesh;
 mod model;
 mod resolve;

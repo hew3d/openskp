@@ -1063,6 +1063,44 @@ fn continuous_material_links(
             )
         })
         .collect();
+    // Exact path first: walk the CMaterial region as the object sequence
+    // it is (matwalk) and anchor the relative slots on the face refs. The
+    // walk validates itself end-to-end (record adjacency + footer); any
+    // surprise falls through to the old arithmetic, then the suffix rule.
+    //
+    // Walk records correlate to the EXTRACTED material list BY NAME, in
+    // order — the signature extractor can miss a record the walk finds
+    // (its slot then simply links to no material), and duplicate names
+    // stay unambiguous because both sequences are file-ordered.
+    if let Some(slots) = crate::matwalk::walk_region(d) {
+        if let Some(links) = crate::matwalk::links_from_walk(&slots, &refs, base + 1) {
+            fn name_of(m: &Material) -> &str {
+                match m {
+                    Material::Solid { name, .. } => name,
+                    Material::Textured { name, .. } => name,
+                }
+            }
+            let mut mapped: Vec<(u16, usize)> = Vec::with_capacity(links.len());
+            let mut j = 0usize;
+            for (slot, wi) in links {
+                let want = &slots[wi].name;
+                let mut k = j;
+                while k < materials.len() && name_of(&materials[k]) != want {
+                    k += 1;
+                }
+                if k < materials.len() {
+                    mapped.push((slot, k));
+                    j = k + 1;
+                }
+                // else: the extractor missed this record; its slot links to
+                // no material (faces on it degrade to unpainted).
+            }
+            if !mapped.is_empty() {
+                return (mapped, Vec::new());
+            }
+        }
+    }
+
     let arithmetic = || -> Option<Vec<(u16, usize)>> {
         if let Some(dc) = declared {
             if dc != materials.len() {
