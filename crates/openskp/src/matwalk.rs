@@ -70,7 +70,6 @@ pub(crate) fn walk_region(d: &[u8]) -> Option<Vec<MatSlot>> {
         }
         let start_rel = rel;
         rel += 1 + pending_attrs;
-        pending_attrs = 0;
         let mut dibs = 0usize;
         let mut attrs = 0usize;
         let (name, np) = record(d, p, &mut dibs, &mut attrs)?;
