@@ -1,6 +1,7 @@
 [package]
 name = "openskp-cli"
 description = "Command-line reader for SketchUp .skp files"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,6 +1,7 @@
 [package]
 name = "openskp-capi"
 description = "C ABI bindings for the openskp SketchUp .skp reader"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
