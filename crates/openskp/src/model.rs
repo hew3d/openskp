@@ -182,8 +182,10 @@ impl Model {
         diagnostics.extend(link_diags);
         // Shared-texture back-refs stay unresolved on this path: placing
         // the referenced CDib slot needs the §4s global anchor, which the
-        // byte-scan path never establishes.
-        let (materials, _shared_refs) = extract::materials(d);
+        // byte-scan path never establishes — recorded rather than a silent
+        // image loss.
+        let (materials, shared_refs) = extract::materials(d);
+        diagnostics.extend(unresolved_shared_texture_diags(shared_refs.len()));
         // Phase 3.2: link face material slots to the materials list by the
         // documented relative-order rule (SKP_FORMAT §4n).
         let mut refs: Vec<u16> = geometry
@@ -661,6 +663,11 @@ impl Model {
             }
             j.key("translation_m");
             j.f64_arr(&inst.translation_m);
+            j.key("is_group");
+            match inst.is_group {
+                Some(b) => j.raw_bool(b),
+                None => j.raw_null(),
+            }
             j.end_obj();
         });
 
@@ -750,6 +757,9 @@ impl Model {
                 texture,
                 applied_size_in,
                 // API-level only; the frozen-oracle JSON predates them
+                // (the Python reference never decoded textured opacity, and
+                // tools/skpwalk.py is frozen — never a place for new
+                // capability — so this field can never join the comparison).
                 image_bytes: _,
                 avg_rgba: _,
                 opacity: _,
@@ -915,6 +925,12 @@ impl Model {
                         j.m_usize("declared", *declared);
                         j.m_usize("extracted", *extracted);
                     }
+                    Diagnostic::UnresolvedSharedTexture { count } => {
+                        // Informational; excluded by the is_desync filter
+                        // above — serialized here only for match completeness.
+                        j.m_str("kind", "unresolved_shared_texture");
+                        j.m_usize("count", *count);
+                    }
                     Diagnostic::RunFiltered { start, reason } => {
                         j.m_str("kind", "run_filtered");
                         j.m_usize("start", *start);
@@ -1011,6 +1027,11 @@ impl Model {
                 j.key("world");
                 j.f64_arr(&n.world);
                 j.m_usize("material", n.material as usize);
+                j.key("is_group");
+                match n.is_group {
+                    Some(b) => j.raw_bool(b),
+                    None => j.raw_null(),
+                }
                 j.end_obj();
             }
             for c in &n.children {
@@ -1020,7 +1041,8 @@ impl Model {
         for n in self.scene() {
             rec(&mut j, &n);
         }
-        // the root run (loose model-level geometry) at identity
+        // the root run (loose model-level geometry) at identity — no
+        // instance places it, so group-vs-component identity doesn't apply.
         if let Some(root) = self.geometry.iter().position(|r| r.def_index.is_none()) {
             j.comma();
             j.begin_obj();
@@ -1028,6 +1050,8 @@ impl Model {
             j.key("world");
             j.f64_arr(&IDENTITY);
             j.m_usize("material", 0);
+            j.key("is_group");
+            j.raw_null();
             j.end_obj();
         }
         j.end_arr();
@@ -1126,16 +1150,13 @@ fn continuous_material_links(
                 // Anchored shared-texture resolution: back-ref slot →
                 // walked dib → owning material's bytes.
                 let shift = links[0].0 as usize - slots[links[0].1].rel;
-                for &(mi, dib_slot) in shared_refs {
-                    let owner = slots
+                let unresolved = resolve_shared_bytes(materials, shared_refs, |dib_slot| {
+                    slots
                         .iter()
                         .position(|s| s.dib_rel.is_some_and(|r| r + shift == dib_slot as usize))
-                        .and_then(|wi| by_walk[wi]);
-                    if let Some(owner) = owner {
-                        adopt_shared_bytes(materials, mi, owner);
-                    }
-                }
-                return (mapped, Vec::new());
+                        .and_then(|wi| by_walk[wi])
+                });
+                return (mapped, unresolved_shared_texture_diags(unresolved));
             }
         }
     }
@@ -1164,21 +1185,22 @@ fn continuous_material_links(
         Some(links) => {
             // Same shared-texture resolution under the arithmetic model:
             // a material's own dib occupies the slot right after it.
-            for &(mi, dib_slot) in shared_refs {
-                let owner = links.iter().find_map(|&(s, i)| {
-                    (own_dib[i] && s as usize + 1 == dib_slot as usize).then_some(i)
-                });
-                if let Some(owner) = owner {
-                    adopt_shared_bytes(materials, mi, owner);
-                }
-            }
-            (links, Vec::new())
+            let unresolved = resolve_shared_bytes(materials, shared_refs, |dib_slot| {
+                links
+                    .iter()
+                    .find_map(|&(s, i)| (own_dib[i] && s as usize + 1 == dib_slot as usize).then_some(i))
+            });
+            (links, unresolved_shared_texture_diags(unresolved))
         }
         None => {
-            let diag = Diagnostic::MaterialLinkFallback {
+            let mut diags = vec![Diagnostic::MaterialLinkFallback {
                 declared: declared.unwrap_or(0),
                 extracted: materials.len(),
-            };
+            }];
+            // The suffix fallback places no slots (model.rs doc comment
+            // above), so every shared-texture back-ref has nothing to
+            // resolve against — recorded rather than a silent image loss.
+            diags.extend(unresolved_shared_texture_diags(shared_refs.len()));
             // The documented §4n relative-order rule (legacy shape).
             let links = if refs.len() <= materials.len() {
                 let first = materials.len() - refs.len();
@@ -1189,16 +1211,58 @@ fn continuous_material_links(
             } else {
                 Vec::new()
             };
-            (links, vec![diag])
+            (links, diags)
         }
     }
+}
+
+/// Zero or one [`Diagnostic::UnresolvedSharedTexture`], the count-to-diag
+/// step every call site (all three linking tiers) applies identically.
+fn unresolved_shared_texture_diags(unresolved: usize) -> Vec<Diagnostic> {
+    if unresolved > 0 {
+        vec![Diagnostic::UnresolvedSharedTexture { count: unresolved }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Resolve every shared-texture back-ref to its owning material and copy
+/// the bytes over, given a model-specific `dib_slot -> owning material
+/// index` lookup. The lookup differs between the exact matwalk anchor and
+/// the arithmetic-fallback anchor (model.rs above); this is the one place
+/// that turns a resolved owner into an actual byte copy, so a future
+/// change to when/how bytes get adopted only needs to land here once.
+/// Returns how many entries `owner_of` could not resolve at all — the
+/// caller records that count rather than letting the loss stay silent
+/// (mirrors the suffix-fallback tier, which has no owner lookup to try).
+fn resolve_shared_bytes(
+    materials: &mut [Material],
+    shared_refs: &[(usize, u16)],
+    mut owner_of: impl FnMut(u16) -> Option<usize>,
+) -> usize {
+    let mut unresolved = 0;
+    for &(mi, dib_slot) in shared_refs {
+        match owner_of(dib_slot) {
+            Some(owner) => adopt_shared_bytes(materials, mi, owner),
+            None => unresolved += 1,
+        }
+    }
+    unresolved
 }
 
 /// Copy the owning material's embedded image onto a shared-texture
 /// material (§8.1: its back-ref names the owner's CDib slot). A no-op
 /// unless the owner actually carries inline bytes.
+///
+/// `shared == owner` and either index being out of range never trigger
+/// given today's two call sites (`shared` is always a `shared_refs` index,
+/// valid by construction in `extract::materials`; `owner` only ever comes
+/// from a lookup already bounded to `materials`, and only ever resolves to
+/// a material with its own inline dib, which a shared-texture material
+/// never has) — kept as cheap defense-in-depth against a malformed file
+/// reaching this differently in the future, not as reachable logic today.
 fn adopt_shared_bytes(materials: &mut [Material], shared: usize, owner: usize) {
-    if shared == owner || shared >= materials.len() {
+    if shared == owner || shared >= materials.len() || owner >= materials.len() {
         return;
     }
     let Material::Textured {
@@ -1359,4 +1423,164 @@ fn escape_into(out: &mut String, s: &str) {
         }
     }
     out.push('"');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn corpus(name: &str) -> Vec<u8> {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("../../corpus/2017");
+        p.push(name);
+        std::fs::read(p).unwrap()
+    }
+
+    fn empty_topology() -> Topology {
+        Topology {
+            vertices: 0,
+            edges: 0,
+            faces: 0,
+            loops: 0,
+            edge_uses: 0,
+            curves: 0,
+            dimensions: 0,
+            texts: 0,
+            section_planes: 0,
+            images_placed: 0,
+            construction_points: 0,
+        }
+    }
+
+    /// Both linking tiers (§4s exact matwalk, §4s slot arithmetic) fail
+    /// when `d` has no CMaterial region at all and `materials` is empty
+    /// while a face still references a matref — landing in the suffix-zip
+    /// fallback. With a nonempty `shared_refs`, the fallback must flag the
+    /// unresolved shared-texture loss rather than stay silent about it.
+    #[test]
+    fn suffix_zip_fallback_flags_unresolved_shared_textures() {
+        let geometry = vec![GeometryRun {
+            start: 0,
+            end: 0,
+            top_level: 0,
+            frame: None,
+            def_index: None,
+            topology: empty_topology(),
+            resolved: (0, 0),
+            mesh: crate::mesh::Mesh {
+                vertices: vec![],
+                faces: vec![crate::mesh::MeshFace {
+                    pid: 0,
+                    outer: vec![],
+                    holes: vec![],
+                    normal: [0.0, 0.0, 1.0],
+                    front_material: Some(5),
+                    back_material: None,
+                    hidden: false,
+                    layer: 0,
+                    texture: None,
+                }],
+                edges: vec![],
+            },
+            placed: vec![],
+            curve_members: vec![],
+        }];
+        let mut materials: Vec<Material> = Vec::new();
+        let shared_refs = vec![(0usize, 7u16)];
+        let (links, diags) =
+            continuous_material_links(&[], &mut materials, &shared_refs, 10, &geometry);
+        assert!(links.is_empty(), "no material exists to link the observed matref to");
+        assert!(
+            diags
+                .iter()
+                .any(|d| matches!(d, Diagnostic::MaterialLinkFallback { .. })),
+            "must record which fallback tier ran: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(
+                |d| matches!(d, Diagnostic::UnresolvedSharedTexture { count } if *count == 1)
+            ),
+            "the shared-texture loss must be flagged, not silent: {diags:?}"
+        );
+    }
+
+    /// house.skp's "[Wood Floor Light]1" is a real shared-texture material;
+    /// the legacy byte-scan path can extract it (materials are pure
+    /// byte-scan, independent of which path walked the geometry) but can
+    /// never place its back-ref globally, so its image bytes stay
+    /// unresolved — the loss must be flagged, not silent.
+    #[test]
+    fn legacy_path_flags_unresolved_shared_textures() {
+        let d = corpus("house.skp");
+        let hdr = header::parse_header(&d).expect("house.skp header");
+        let m = Model::parse_legacy(&d, hdr).expect("legacy parse");
+        assert!(
+            m.materials.iter().any(
+                |mat| matches!(mat, Material::Textured { name, .. } if name.contains("Wood Floor Light"))
+            ),
+            "the shared-texture material must still be extracted by name"
+        );
+        assert!(
+            m.diagnostics.iter().any(
+                |d| matches!(d, Diagnostic::UnresolvedSharedTexture { count } if *count > 0)
+            ),
+            "the legacy path's shared-texture loss must be flagged, not silent: {:?}",
+            m.diagnostics
+        );
+    }
+
+    /// The arithmetic tier can place every observed face matref correctly
+    /// (an overall SUCCESS) while one shared-texture back-ref still names a
+    /// slot no material owns — a per-entry resolution failure distinct from
+    /// "the whole tier failed". That partial loss must also be flagged.
+    #[test]
+    fn arithmetic_success_still_flags_a_partial_unresolved_shared_texture() {
+        let geometry = vec![GeometryRun {
+            start: 0,
+            end: 0,
+            top_level: 0,
+            frame: None,
+            def_index: None,
+            topology: empty_topology(),
+            resolved: (0, 0),
+            mesh: crate::mesh::Mesh {
+                vertices: vec![],
+                faces: vec![crate::mesh::MeshFace {
+                    pid: 0,
+                    outer: vec![],
+                    holes: vec![],
+                    normal: [0.0, 0.0, 1.0],
+                    front_material: Some(1),
+                    back_material: None,
+                    hidden: false,
+                    layer: 0,
+                    texture: None,
+                }],
+                edges: vec![],
+            },
+            placed: vec![],
+            curve_members: vec![],
+        }];
+        // One solid material (no inline dib) placed at slot 1 by the
+        // arithmetic model (base 1 -> first = (1+1) - (1+0) = 1); the
+        // observed matref {1} lands on it, so arithmetic() succeeds.
+        let mut materials = vec![Material::Solid {
+            name: "M".into(),
+            rgba: [0, 0, 0, 0],
+            opacity: 1.0,
+        }];
+        // A shared-texture back-ref naming a dib slot no material owns
+        // (the sole material has no inline dib to begin with).
+        let shared_refs = vec![(0usize, 99u16)];
+        let (links, diags) =
+            continuous_material_links(&[], &mut materials, &shared_refs, 1, &geometry);
+        assert_eq!(links, vec![(1u16, 0usize)], "the arithmetic tier must still succeed");
+        assert!(
+            diags.iter().any(
+                |d| matches!(d, Diagnostic::UnresolvedSharedTexture { count } if *count == 1)
+            ),
+            "a per-entry resolution failure inside a successful tier must also be flagged: {diags:?}"
+        );
+    }
 }

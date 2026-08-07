@@ -287,6 +287,15 @@ pub enum Diagnostic {
     /// face matrefs or the manager's declared count, so face→material
     /// linkage fell back to the documented §4n suffix alignment.
     MaterialLinkFallback { declared: usize, extracted: usize },
+    /// `count` shared-texture materials' back-refs (§8.1) could not be
+    /// resolved to their owning material's image bytes and keep
+    /// `image_bytes: None` — the anchor an owner lookup needs was missing
+    /// (the §4n suffix fallback placed no slots, or the file took the
+    /// legacy byte-scan path, which never establishes the §4s global
+    /// anchor) or a specific owner lookup came up empty. Informational: the
+    /// loss is recorded on `Model::diagnostics`, like every other fallback
+    /// here, rather than left silent.
+    UnresolvedSharedTexture { count: usize },
 }
 
 /// Why a candidate run was filtered out of [`geometry_runs`].
@@ -315,6 +324,7 @@ impl Diagnostic {
                 | Diagnostic::ContinuousFallback { .. }
                 | Diagnostic::PadSlotBound { .. }
                 | Diagnostic::MaterialLinkFallback { .. }
+                | Diagnostic::UnresolvedSharedTexture { .. }
         )
     }
 }
