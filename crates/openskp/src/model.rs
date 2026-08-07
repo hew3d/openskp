@@ -65,6 +65,10 @@ pub struct Node {
     pub hidden: bool,
     /// The placing instance's §4q layer slot (0 = default layer).
     pub layer: u16,
+    /// `Some(true)` = placed by a `CGroup`, `Some(false)` = by a
+    /// `CComponentInstance` (§4s class identity, as on [`Instance`]);
+    /// `None` on the legacy byte-scan path, which cannot tell them apart.
+    pub is_group: Option<bool>,
     pub children: Vec<Node>,
 }
 
@@ -367,6 +371,7 @@ impl Model {
                             material,
                             hidden,
                             layer,
+                            is_group,
                             ..
                         }) => Some(PlacedInstance {
                             defref: *defref,
@@ -374,6 +379,7 @@ impl Model {
                             material: *material,
                             hidden: *hidden,
                             layer: *layer,
+                            is_group: *is_group,
                         }),
                         _ => None,
                     })
@@ -524,6 +530,7 @@ impl Model {
                     i.material.unwrap_or(0),
                     i.hidden.unwrap_or(false),
                     i.layer.unwrap_or(0),
+                    i.is_group,
                     0,
                 )
             })
@@ -539,6 +546,7 @@ impl Model {
         material: u16,
         hidden: bool,
         layer: u16,
+        is_group: Option<bool>,
         depth: u32,
     ) -> Node {
         let world = mat_mul(parent, &mat_of(local));
@@ -570,6 +578,7 @@ impl Model {
                             m,
                             p.hidden,
                             p.layer,
+                            Some(p.is_group),
                             depth + 1,
                         )
                     })
@@ -587,6 +596,7 @@ impl Model {
             material,
             hidden,
             layer,
+            is_group,
             children,
         }
     }

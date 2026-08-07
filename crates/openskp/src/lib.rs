@@ -150,6 +150,10 @@ pub struct Image {
 pub struct PlacedInstance {
     pub defref: u32,
     pub transform: [f64; 13],
+    /// `true` = a `CGroup` placement, `false` = a `CComponentInstance`
+    /// (§4s: identical layouts, distinct classes — the class carries the
+    /// group-vs-component identity, exactly as on [`Instance`]).
+    pub is_group: bool,
     /// Drawbase matref (§4q): material painted on the instance itself,
     /// inherited by default-material faces in its subtree (0 = none).
     pub material: u16,
@@ -397,6 +401,7 @@ pub fn geometry_runs_with_diagnostics(d: &[u8]) -> (Vec<GeometryRun>, Vec<Diagno
                         material,
                         hidden,
                         layer,
+                        is_group,
                         ..
                     }) => Some(PlacedInstance {
                         defref: *defref,
@@ -404,6 +409,7 @@ pub fn geometry_runs_with_diagnostics(d: &[u8]) -> (Vec<GeometryRun>, Vec<Diagno
                         material: *material,
                         hidden: *hidden,
                         layer: *layer,
+                        is_group: *is_group,
                     }),
                     _ => None,
                 })

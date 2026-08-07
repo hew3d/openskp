@@ -63,6 +63,9 @@ fn cube_survives_a_definition_full_of_unknowns() {
             material: 0,
             hidden: false,
             layer: 0,
+            // mixed-definition nests a COMPONENT instance (the 0.5 box
+            // definition), not a group.
+            is_group: false,
         }],
         "the nested instance places the 0.5 box definition (declared idx 22)"
     );
