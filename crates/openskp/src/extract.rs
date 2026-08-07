@@ -35,6 +35,19 @@ fn round_to(x: f64, ndigits: i32) -> f64 {
     (x * f).round() / f
 }
 
+/// The use-opacity slider rule shared by solid and textured materials: the
+/// stored value applies only when the flag byte is set, else the material
+/// is opaque. Both call sites still handle a MISSING f64/flag themselves
+/// (solid drops the material as an invalid record; textured defaults to
+/// opaque) — this only holds the rule for when both bytes are present.
+fn use_opacity(v: f64, flag: u8) -> f64 {
+    if flag == 1 {
+        round_to(v, 4)
+    } else {
+        1.0
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -119,8 +132,7 @@ pub fn materials(d: &[u8]) -> (Vec<Material>, Vec<(usize, u16)>) {
             // (byte-proven against .dae diffuse-alpha ground truth across
             // the corpus and two production models).
             let opacity = match (f64le(d, e + 18), d.get(e + 26)) {
-                (Some(v), Some(1)) => round_to(v, 4),
-                (Some(_), Some(_)) => 1.0,
+                (Some(v), Some(&flag)) => use_opacity(v, flag),
                 _ => continue,
             };
             let rgba = match d.get(e + 2..e + 6) {
@@ -188,8 +200,7 @@ pub fn materials(d: &[u8]) -> (Vec<Material>, Vec<(usize, u16)>) {
                     je += 4;
                 }
                 let fe = je + 16; // past the applied-size f64 pair
-                let (flen, chars_at) = crate::carchive::mfc_strlen(d, fe)?;
-                Some(chars_at + flen * 2)
+                mfc_str_end_at(d, fe)
             });
             // §4v: the average RGBA sits right after the filename record —
             // the colour .dae exports use as the material's diffuse.
@@ -226,7 +237,7 @@ pub fn materials(d: &[u8]) -> (Vec<Material>, Vec<(usize, u16)>) {
             if tex.is_none() {
                 continue; // not the back-ref texture shape after all
             }
-            let ce = crate::carchive::mfc_strlen(d, fe).map(|(flen, chars_at)| chars_at + flen * 2);
+            let ce = mfc_str_end_at(d, fe);
             let avg_rgba = ce.and_then(|ce| d.get(ce..ce + 4).map(|b| [b[0], b[1], b[2], b[3]]));
             // The back-ref word is the owning material's CDib global map
             // slot; the caller copies that material's bytes here.
@@ -261,7 +272,7 @@ fn textured_opacity(d: &[u8], ce: usize) -> f64 {
         return 1.0;
     }
     match (f64le(d, ce + 21), d.get(ce + 29)) {
-        (Some(v), Some(1)) => round_to(v, 4),
+        (Some(v), Some(&flag)) => use_opacity(v, flag),
         _ => 1.0,
     }
 }
@@ -270,6 +281,13 @@ fn textured_opacity(d: &[u8], ce: usize) -> f64 {
 fn mfc_str_at(d: &[u8], off: usize) -> Option<String> {
     let (len, chars_at) = crate::carchive::mfc_strlen(d, off)?;
     d.get(chars_at..chars_at + len * 2).and_then(decode_strict)
+}
+
+/// End offset of the MFC utf16 string record at exactly `off` — one past
+/// its last character byte, where the record's tail data starts.
+fn mfc_str_end_at(d: &[u8], off: usize) -> Option<usize> {
+    let (len, chars_at) = crate::carchive::mfc_strlen(d, off)?;
+    Some(chars_at + len * 2)
 }
 
 // ---- scenes ----
