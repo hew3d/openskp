@@ -13,4 +13,4 @@ name = "openskp"
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-openskp = { path = "../openskp", version = "0.2.0" }
+openskp = { path = "../openskp", version = "0.3.0" }
