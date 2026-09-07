@@ -119,4 +119,6 @@ in [`CONTRIBUTING.md`](CONTRIBUTING.md), which keep that possible.
 
 SketchUp is a trademark of Trimble Inc. This project is independent of
 and unaffiliated with Trimble; it interoperates with the `.skp` format
-based on clean-room analysis of files.
+based on clean-room analysis of files. Texture images embedded in the
+corpus `.skp` files are third-party content outside the GPL grant — see
+[`corpus/README.md`](corpus/README.md#licensing).

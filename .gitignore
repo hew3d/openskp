@@ -10,5 +10,11 @@ tools/gen/
 # Rust
 /target
 
-# SketchUp backup saves
+# SketchUp backup and autosave files
 *~.skp
+AutoSave_*.skp
+
+# COLLADA exporter texture folders: third-party images that nothing reads
+corpus/**/*.jpg
+corpus/**/*.jpeg
+corpus/**/*.png

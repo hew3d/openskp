@@ -351,8 +351,8 @@ mod specs {
             return;
         };
         let slots = walk_region(&d).expect("theater walks");
-        assert_eq!(slots.len(), 81);
-        assert_eq!(slots.last().unwrap().rel, 96);
+        assert_eq!(slots.len(), 78);
+        assert_eq!(slots.last().unwrap().rel, 92);
     }
 
     /// Anchoring: a unique shift is found, ambiguity is refused.

@@ -28,6 +28,26 @@ material colors, and UVs.
 All `.skp` files were saved by retail SketchUp releases from models built
 for this project, except `third-party/` (see its README). Files that use
 SketchUp's bundled material library embed the corresponding texture images
-exactly as SketchUp saved them; the `<name>/` directories alongside some
-`.dae` files are the texture folders SketchUp's COLLADA exporter wrote and
-are ground-truth data, not project assets.
+exactly as SketchUp saved them: the embedded bytes are part of the format
+under test. The texture folders that SketchUp's COLLADA exporter writes
+alongside a `.dae` are not kept in the repository — nothing in the test
+suite or the specification reads them, and `.gitignore` excludes them so a
+re-export cannot reintroduce them. A `.dae` whose `<init_from>` names an
+absent image file is expected.
+
+## Licensing
+
+The corpus is covered by the repository's GPL-3.0-only license except for
+third-party content embedded in the `.skp` files, which is not the
+project's to license and is outside the GPL grant:
+
+- Textures from SketchUp's bundled material library and the default
+  template's scale-figure component are Trimble Content. They appear here
+  as SketchUp wrote them into saved models, the use the SketchUp end-user
+  license agreement permits ("in connection with the normal course of the
+  operation of such Software"), and they remain Trimble's.
+- Textures embedded in `third-party/theater-2017.skp` were supplied by the
+  model's author.
+
+Model and component thumbnails embedded in every `.skp` are SketchUp's
+renders of the project's own geometry.

@@ -18,10 +18,11 @@ and pinned texture projections on real faces.
 | `theater-2017.skp` | the model |
 | `theater-2017.dae` | its COLLADA export ("Export Hidden Geometry" enabled), the equivalence oracle |
 | `theater-2017-stats.txt` | SketchUp's own entity statistics for cross-checking totals |
-| `theater-2017/` | texture folder written by the COLLADA exporter |
 
 Scale: 72,074 edges, 27,594 faces, 497 component instances, 920 groups,
-149 component definitions, 94 layers, 81 materials.
+149 component definitions, 94 layers, 78 materials. The model's textures
+were supplied by its author; the exporter's texture folder is not kept
+(see [`../README.md`](../README.md)).
 
 The acceptance benchmark (`crates/openskp/tests/theater_dae.rs`) proves
 world-space equivalence against the export: 41,725 world vertices and

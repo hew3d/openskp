@@ -4,9 +4,10 @@ Every file was authored in SketchUp Make 2017 (v17.3.116) following the
 conventions in [`../README.md`](../README.md): drawn from the origin along
 the axes with typed exact dimensions, one isolated feature per file. A
 same-basename `.dae` is the COLLADA ground-truth export where geometry,
-materials, or UVs are asserted; a same-basename directory is the texture
-folder that export wrote. Files without a `.dae` isolate structures the
-COLLADA exporter does not carry (annotations, guides, save noise).
+materials, or UVs are asserted; the exporter's texture folders are not
+kept (see [`../README.md`](../README.md)). Files without a `.dae` isolate
+structures the COLLADA exporter does not carry (annotations, guides, save
+noise).
 
 Unless noted, files start from the 2017 default template (which seeds the
 scale-figure component into every save — parsers must treat template
