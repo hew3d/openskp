@@ -96,6 +96,9 @@ fn unframed_surviving_runs_are_always_recorded() {
             continue;
         }
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.ends_with("~.skp") {
+            continue; // SketchUp autosave backup (gitignored), not a corpus file
+        }
         let d = std::fs::read(&path).unwrap();
         let (runs, diags) = openskp::geometry_runs_with_diagnostics(&d);
         for r in runs {

@@ -94,6 +94,7 @@ content as ordinary model content).
 | `image.skp` | An imported raster image placed at 1 m width — the `CImage` entity. |
 | `two-scenes.skp` | Two saved scenes — page records and their embedded cameras. |
 | `attributes.skp` | A dynamic component — attribute containers/dictionaries and every typed value encoding. |
+| `feature-pack.skp` | Box A (one soft+smooth edge, one hidden edge, hidden top face), imported `pin-fixed-distort.skp` and `attributes.skp`, then a guide line, guide point, section plane, leader + screen text, linear dimension and placed image back to back in one root list, plus two scenes — pins every annotation body's exact extent (each is followed by the next one's record). |
 
 ## Scale and stress
 

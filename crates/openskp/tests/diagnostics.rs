@@ -9,6 +9,14 @@ fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/2017")
 }
 
+/// SketchUp's autosave backups (`name~.skp`, gitignored) can sit next to
+/// the corpus files in a working checkout; they are not corpus files.
+fn is_backup(p: &Path) -> bool {
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with("~.skp"))
+}
+
 fn corpus(name: &str) -> Vec<u8> {
     let p = corpus_dir().join(name);
     std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
@@ -39,6 +47,9 @@ fn clean_corpus_has_zero_desync_diagnostics() {
         let path = entry.unwrap().path();
         if path.extension().and_then(|e| e.to_str()) != Some("skp") {
             continue; // .dae ground truth, subdirs (future/ is excluded by read_dir being non-recursive)
+        }
+        if is_backup(&path) {
+            continue;
         }
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         let d = std::fs::read(&path).unwrap();
@@ -132,5 +143,74 @@ fn corrupted_stream_resyncs_and_records_diagnostics() {
     assert!(
         m.to_json().contains("\"diagnostics\""),
         "desync diagnostics must appear in the JSON"
+    );
+}
+
+/// Every 2017 file — the authored corpus plus the third-party benchmark —
+/// is served by the CONTINUOUS walk. A `ContinuousFallback` is not a desync
+/// diagnostic, so the zero-desync bar above would not notice a file quietly
+/// dropping to the legacy path; this does. Among other structural checks
+/// the walk requires the root list to end exactly at the §4l root tail, so
+/// a mis-sized entity body anywhere in a root list fails here.
+#[test]
+fn every_2017_file_takes_the_continuous_path() {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(corpus_dir())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("skp") && !is_backup(p))
+        .collect();
+    files.push(corpus_dir().join("../third-party/theater-2017.skp"));
+    let mut checked = 0;
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let m = openskp::Model::parse(&std::fs::read(path).unwrap()).unwrap();
+        if !m.version.starts_with("{17.") {
+            continue;
+        }
+        let fell_back: Vec<_> = m
+            .diagnostics
+            .iter()
+            .filter(|d| matches!(d, openskp::Diagnostic::ContinuousFallback { .. }))
+            .collect();
+        assert!(fell_back.is_empty(), "{name}: {fell_back:?}");
+        assert!(
+            m.diagnostics
+                .iter()
+                .any(|d| matches!(d, openskp::Diagnostic::ContinuousWalk { .. })),
+            "{name}: no ContinuousWalk diagnostic"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 30,
+        "corpus glob looks wrong ({checked} 2017 files)"
+    );
+}
+
+/// A root list that does not end at the root tail abandons the continuous
+/// walk LOUDLY (a recorded `ContinuousFallback` at stage "root-tail")
+/// instead of returning a model built from misread root elements. The
+/// corruption flips the tail's utf16 marker in box.skp, whose root tail is
+/// the only `58 79 F0 6A 00 FF FE FF` run in the file.
+#[test]
+fn a_misplaced_root_list_end_falls_back_loudly() {
+    let mut d = corpus("box.skp");
+    let marker = [0x58, 0x79, 0xf0, 0x6a, 0x00, 0xff, 0xfe, 0xff];
+    let hits: Vec<usize> = d
+        .windows(marker.len())
+        .enumerate()
+        .filter(|(_, w)| *w == marker)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(hits.len(), 1, "box.skp root tail marker");
+    d[hits[0] + 5] = 0x00; // FF FE FF -> 00 FE FF
+    let m = openskp::Model::parse(&d).unwrap();
+    assert!(
+        m.diagnostics.iter().any(|x| matches!(
+            x,
+            openskp::Diagnostic::ContinuousFallback { stage, .. } if stage == "root-tail"
+        )),
+        "expected a root-tail fallback, got {:?}",
+        m.diagnostics
     );
 }

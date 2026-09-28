@@ -147,14 +147,22 @@ model section:
   CComponentDefinition × N      trailing definitions, back-to-back
   <count:u32>                   THE ROOT ENTITY LIST (the model's own
                                 entities: groups, instances, loose geometry)
-root tail: zeros + constant marker 58 79 F0 6A 00 +
+root tail: 00 00 00 00 + u32 + 00 + u32 + 00 +
            geo-location strings (city, country) + latitude/longitude f64  [§4l]
 ```
 
 The exact composition of the pre-model region is not specified — a reader
 reaches the model section via the calibration anchors of §3.2 rather than
-by decoding every manager. The marker `58 79 F0 6A 00` is constant across
-every observed 2017 file and delimits the root record's trailing content.
+by decoding every manager. The root list ends exactly where the root tail
+begins on every 2017 corpus file: four zero bytes, a u32 (non-zero only in
+the three files holding a section plane — candidate: a reference to the
+active plane), a zero byte, a u32 (`58 79 F0 6A` in every authored file,
+`58 BC CB 3D` in theater-2017; meaning undecoded), a zero byte, then the
+utf16 city string (`FF FE FF` at +14). The walk reads a counted list, so
+a mis-sized body can still "complete" it on misread elements without a
+stall; the reference reader therefore requires this shape exactly at the
+list end and otherwise abandons the continuous walk with a recorded
+fallback.
 
 In minimal files the root entity-list count sits directly after the
 preview thumbnail's PNG `IEND` chunk [§4j].
@@ -537,22 +545,31 @@ variant middle for readers that do not decode it.
 ### 10.3 Construction geometry [§4l, §4w]
 
 **CConstructionPoint** (schema 0): preamble + drawbase + 3 × f64 position
-+ 3 × f64 reference (tape-measure anchor) point + u32.
++ 3 × f64 reference (tape-measure anchor) point + u8 (`01` in both corpus
+instances). In feature-pack.skp the section plane's new-class record
+follows the u8 directly; construction-point.skp's point is the last root
+entity, so a u32 reading there only swallows root-tail zeros.
 
 **CConstructionLine** (schema 1, guides): preamble + drawbase + 3 × f64
 anchor + 3 × f64 unit direction + 2 × f64 line-parameter bounds (±1.0e30
-exactly = the infinite-guide sentinel) + 7 zero bytes.
+exactly = the infinite-guide sentinel) + 4 zero bytes (feature-pack.skp:
+the guide point's new-class record follows directly).
 
-**CSectionPlane** (schema 2, candidate): preamble + drawbase + 4 × f64
-plane (A, B, C, D) + u32; a trailing back-ref word follows in the single
-observed instance.
+**CSectionPlane** (schema 2): preamble + drawbase + 4 × f64 plane
+(A, B, C, D), nothing after. feature-pack.skp's plane (0, 1, 0, 0) — the
+front face of the authored box — is followed directly by a CText
+new-class record; in section-plane.skp and house-plus.skp the plane is
+the last root entity and the four zero bytes behind it open the root
+tail.
 
-### 10.4 CImage (schema 1, candidate) [§4l]
+### 10.4 CImage (schema 1) [§4l]
 
-Preamble + drawbase + 106-byte placement block (contains inch-per-pixel
-f64s consistent with the source image's pixel width) + utf16 source path
-+ 16-byte GUID + u32. The pixel data lives in the document's embedded
-`CDib` pool, not inline; the linkage is undecoded.
+Preamble + drawbase + layer object pointer (a back-ref word; the `7F FF`
++ u32 escape on large maps) + 13 × f64 placement block (inch-per-pixel
+scale plus pose, instance-transform-shaped) + utf16 source path + 16-byte
+GUID, nothing after: in house-plus.skp the next root entity's new-class
+record starts immediately behind the GUID. The pixel data lives in the
+document's embedded `CDib` pool, not inline; the linkage is undecoded.
 
 ### 10.5 Attribute dictionaries [§4s, §4t]
 
@@ -636,15 +653,16 @@ Unknown bytes inside otherwise-exact records:
 - CLayer: the u16 and the 21-byte tail (§8.3).
 - Drawbase bytes [3..5) and [7] (§5.2).
 - CCurve's u8; CRelationship's u32 (§6.4, §10.6).
-- CConstructionLine's 7-byte tail (§10.3).
+- CConstructionLine's 4-byte tail; CConstructionPoint's u8 (§10.3).
 - CDimensionLinear: the semantic fields inside the 165-byte tail (§10.1).
 - CText: the leader-variant geometry fields (§10.2).
 - Materials: the u32 after JPEG texture payloads; the second average
   color's role and the u32 + 4 bytes before the textured opacity (§8.1).
 - CDib subtypes other than 1 and 4, if any exist (§8.2).
 
-Candidate extents (single observed instance): CSectionPlane (and its
-trailing back-ref word), CImage (§10.3, §10.4).
+CSectionPlane and CImage extents are pinned by a directly following
+record (feature-pack.skp, house-plus.skp); the CImage → `CDib` linkage
+remains undecoded (§10.3, §10.4).
 
 Never observed as entity-list elements: CDimensionRadial, CPolyline3d,
 CComponentBehavior, CComponent, and the pre-model manager records
@@ -683,8 +701,8 @@ This table is machine-checked against `CVersionMap` by
 | CDimensionLinear | 6 | entity lists | Full | exact extent; tail fields undecoded (§10.1) |
 | CDimensionRadial | 2 | entity lists (expected) | Resync | not in corpus |
 | CText | 9 | entity lists | Full | both variants; exact extent (§10.2) |
-| CSectionPlane | 2 | entity lists | Skip | candidate extent (§10.3) |
-| CImage | 1 | entity lists | Skip | candidate extent (§10.4) |
+| CSectionPlane | 2 | entity lists | Full | plane equation; exact extent (§10.3) |
+| CImage | 1 | entity lists | Skip | exact extent; pixel linkage undecoded (§10.4) |
 | CConstructionLine | 1 | entity lists | Full | guides (§10.3) |
 | CConstructionPoint | 0 | entity lists | Full | typed-dimension proven (§10.3) |
 | CConstructionGeometry | 0 | (base class) | Resync | never observed standalone |
@@ -744,7 +762,7 @@ Citation anchors used in source comments, mapped to this document:
 | §4i | entity preamble, pid presence mask | 5.1 |
 | §4j | root-list anchor after the thumbnail | 4 |
 | §4k | dimensions, fonts, text | 10.1, 10.2 |
-| §4l | root tail; single-instance candidates | 4, 10.3, 10.4 |
+| §4l | root tail; annotation body extents | 4, 10.3, 10.4 |
 | §4m | template independence | 12 |
 | §4n | material/layer binding | 8.4 |
 | §4o | in-list instance body | 7.2 |

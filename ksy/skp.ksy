@@ -22,7 +22,7 @@ doc: |
                                        objects; purged slots = null tags)
     CComponentDefinition ×N            trailing defs, back-to-back class-refs
     <count:u32>  ROOT entity list      the model's own entities
-    58 79 f0 6a 00 …                   the §4l root-record tail
+    00×4 u32 00 u32 00 <utf16 …>       the §4l root-record tail
 
   Escalations seen only at scale (§4t): object/class refs past 0x7FFF slots
   use the MFC big-tag escape (0x7FFF + u32); string records escalate at 255
@@ -322,8 +322,8 @@ types:
     doc: |
       CConstructionLine schema 1 (§4w, guide.skp): after preamble +
       drawing_element_base — anchor point, unit direction, and the two
-      line-parameter bounds (±1e30 exactly = infinite guide), + 7B tail
-      (zeros observed, TBD).
+      line-parameter bounds (±1e30 exactly = infinite guide), + 4B tail
+      (zeros observed; pinned where the next record follows directly).
     seq:
       - id: point
         type: vec3_inches
@@ -334,17 +334,18 @@ types:
       - id: bound_hi
         type: f8
       - id: tail
-        size: 7
+        size: 4
   cconstructionpoint_body:
     doc: |
-      CConstructionPoint schema 0 (§4l): position + reference vector + u4.
+      CConstructionPoint schema 0 (§4l): position + reference point + u1
+      (pinned by a following new-class record, feature-pack.skp).
     seq:
       - id: position
         type: vec3_inches
       - id: reference
         type: vec3_inches
       - id: tail
-        type: u4
+        type: u1
   clayer_body:
     doc: |
       CLayer schema 2 (§4s): after the preamble — display name, hidden

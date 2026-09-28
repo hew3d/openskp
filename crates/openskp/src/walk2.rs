@@ -17,7 +17,7 @@
 //!                                  purged slots serialize as null tags)
 //! CComponentDefinition ×N         trailing defs, back-to-back class-refs
 //! <count:u32> ROOT entity list    (named groups, instances, loose geometry)
-//! 58 79 f0 6a 00 …                the §4l root-record tail
+//! 00×4 u32 00 u32 00 <utf16 …>    the §4l root-record tail
 //! ```
 //!
 //! Any structural surprise fails the whole attempt loudly (stage + offset)
@@ -84,8 +84,9 @@ impl WalkFail {
     }
 }
 
-/// Attempt the continuous walk. `Err` = the anchor/calibration failed or
-/// the walk died before the root list completed.
+/// Attempt the continuous walk. `Err` = the anchor/calibration failed, the
+/// walk died before the root list completed, or the list did not end at
+/// the §4l root tail.
 pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
     let decl = find(d, CLAYER_DECL).ok_or(WalkFail {
         stage: "anchor",
@@ -251,6 +252,20 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
             Err(st) => return Err(WalkFail::from_stall("root-list", st)),
         }
     }
+    // The list is COUNTED, so a body reader that over- or under-consumes
+    // can "finish" it on misread elements without a stall (feature-pack.skp
+    // once lost five root annotations that way). Pin the end structurally:
+    // the §4l root tail must start exactly here.
+    if !is_root_tail(d, ar.pos) {
+        return Err(WalkFail {
+            stage: "root-tail",
+            at: ar.pos,
+            detail: format!(
+                "root list does not end at the root tail: {:02x?}",
+                &d[ar.pos.min(d.len())..(ar.pos + 17).min(d.len())]
+            ),
+        });
+    }
 
     let bound = std::mem::take(&mut ar.bound);
     Ok(Continuous {
@@ -357,6 +372,16 @@ pub fn resolve_range(map: &[Slot], lo: usize, hi: usize) -> (usize, usize) {
         }
     }
     (sat, con)
+}
+
+/// The §4l root tail's opening shape, identical on every 2017 corpus file:
+/// `00 00 00 00` + u32 + `00` + u32 + `00`, then the utf16 geo-location
+/// city string (`FF FE FF` at +14).
+fn is_root_tail(d: &[u8], at: usize) -> bool {
+    match d.get(at..at + 17) {
+        Some(t) => t[0..4] == [0; 4] && t[8] == 0 && t[13] == 0 && t[14..17] == [0xff, 0xfe, 0xff],
+        None => false,
+    }
 }
 
 fn find(d: &[u8], needle: &[u8]) -> Option<usize> {

@@ -106,7 +106,7 @@ pub enum Entity {
         material: u16,
         is_group: bool,
     },
-    /// A section plane (Phase 2.2 candidate extent — SKP_FORMAT §4l).
+    /// A section plane (exact extent — SKP_FORMAT §4l, §10.3).
     SectionPlane {
         pid: u32,
         plane: [f64; 4],
@@ -127,7 +127,7 @@ pub enum Entity {
         direction: [f64; 3],
         bounds: [f64; 2],
     },
-    /// A placed image entity (Phase 2.2 candidate extent — SKP_FORMAT §4l).
+    /// A placed image entity (exact extent — SKP_FORMAT §4l, §10.4).
     Image {
         pid: u32,
     },
@@ -588,9 +588,13 @@ fn r_ctext(ar: &mut CArchive) -> Result<Entity, Stall> {
     Ok(Entity::Text { pid, content })
 }
 
-/// `CSectionPlane` schema 2 (SKP_FORMAT §4l, candidate extent): preamble +
-/// drawbase + plane 4×f64 + u32. section-plane.skp's plane decodes to
-/// (0, 0, -1, 19.685" = 0.5 m) — the authored mid-box horizontal cut.
+/// `CSectionPlane` schema 2 (SKP_FORMAT §4l): preamble + drawbase + plane
+/// 4×f64 and NOTHING after. section-plane.skp's plane decodes to
+/// (0, 0, -1, 19.685" = 0.5 m) — the authored mid-box horizontal cut. The
+/// old u32 tail was pinned on section-plane.skp and house-plus.skp, where
+/// the plane is the last root entity and the four "tail" bytes are the
+/// zeros opening the §4l root tail; feature-pack.skp puts the next root
+/// entity's new-class record (`FF FF`, CText) directly behind the plane.
 fn r_csectionplane(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     ar.take(10)?; // drawbase
@@ -598,14 +602,18 @@ fn r_csectionplane(ar: &mut CArchive) -> Result<Entity, Stall> {
     for slot in plane.iter_mut() {
         *slot = ar.f8()?;
     }
-    ar.take(4)?; // u32 flags (0 in the corpus instance)
     Ok(Entity::SectionPlane { pid, plane })
 }
 
 /// `CConstructionPoint` schema 0 (SKP_FORMAT §4l): preamble + drawbase +
-/// position 3×f64 + reference point 3×f64 + u32. The corpus instance's
-/// position is EXACTLY the authored (1 m, 2 m, 3 m) — typed-dimension
-/// proof of the layout.
+/// position 3×f64 + reference point 3×f64 + u8. The construction-point.skp
+/// instance's position is EXACTLY the authored (1 m, 2 m, 3 m) —
+/// typed-dimension proof of the layout. The old u32 tail was pinned on
+/// that file, whose point is the last root entity and sits in a zero run
+/// the extra bytes hid in; feature-pack.skp puts the NEXT root entity's
+/// new-class record (`FF FF`, CSectionPlane) directly behind a single
+/// `01` byte and pins the tail to exactly 1 (same failure shape as the
+/// CImage phantom u32).
 fn r_cconstructionpoint(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     ar.take(10)?; // drawbase
@@ -614,7 +622,7 @@ fn r_cconstructionpoint(ar: &mut CArchive) -> Result<Entity, Stall> {
         *slot = ar.f8()?;
     }
     ar.take(24)?; // reference point 3×f64 (the tape-measure anchor)
-    ar.take(4)?; // u32 flags (1 in the corpus instance)
+    ar.take(1)?; // u8 (1 in both corpus instances)
     Ok(Entity::ConstructionPoint { pid, point_in })
 }
 
