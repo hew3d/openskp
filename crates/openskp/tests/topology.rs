@@ -59,6 +59,41 @@ fn pid_stress_counts_by_construction() {
     assert_eq!(sat, con, "100% back-ref resolution");
 }
 
+/// box.skp is the only file in this table with a corpus/2026 twin. The
+/// `openskp::geometry_runs` free function above walks 2017 CArchive bytes
+/// directly and is not container-agnostic (it can't read a ZIP container at
+/// all), and its run set/`resolved` back-reference accounting isn't even
+/// the same computation `Model::parse`'s continuous-walk path uses for the
+/// SAME 2017 file (that path also surfaces the default-template's own
+/// construction run ahead of the user's drawing, which this free function
+/// discards) — so the cross-container check goes through the public
+/// `Model` API instead, on the SAME "root entity list = last run"
+/// convention used elsewhere (`layer_hidden.rs`, `feature_pack.rs`), and
+/// compares concrete topology only (not `resolved`, whose two computations
+/// aren't comparable at all, container aside).
+#[test]
+fn box_topology_matches_between_containers() {
+    for rel in ["2017/box.skp", "2026/box.skp"] {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("../../corpus");
+        p.push(rel);
+        let d = std::fs::read(&p).unwrap();
+        let m = openskp::Model::parse(&d).unwrap();
+        let root = m
+            .geometry
+            .iter()
+            .rev()
+            .find(|r| r.def_index.is_none())
+            .expect("root run");
+        let t = &root.topology;
+        assert_eq!(
+            (t.vertices, t.edges, t.faces, t.loops, t.edge_uses, t.curves),
+            (8, 12, 6, 6, 24, 0),
+            "{rel}: topology"
+        );
+    }
+}
+
 #[test]
 fn topology_matches_ground_truth() {
     for (file, runs) in CASES {

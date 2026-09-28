@@ -1,7 +1,7 @@
 //! Version/container context (Phase 0.1; see `docs/DEVELOPMENT.md`).
 //!
 //! `detect_container` is the seam where outer-container changes land: the
-//! post-2017 releases abandoned the 2013–2017 layout for a ZIP archive
+//! releases after 2017 abandoned the 2013–2017 layout for a ZIP archive
 //! (evidence: `corpus/2026/` — a ZIP local header follows the two string
 //! records), so an arbitrary file is classified before either reader runs.
 //!
@@ -21,7 +21,7 @@ pub enum Container {
     /// uncompressed MFC `CArchive` object stream opening with the
     /// `CVersionMap` new-class record.
     Carchive2017,
-    /// Post-2017 (observed: SketchUp 2026, `{26.x}`): the same two leading
+    /// 2026 (observed: SketchUp 2026, `{26.x}`): the same two leading
     /// string records, then a ZIP archive holding `model.dat` (a tagged
     /// record tree), material XML, and images (SKP_FORMAT §16).
     Zip,
@@ -46,7 +46,7 @@ pub fn detect_container(d: &[u8]) -> Container {
     }
 }
 
-/// Where the post-2017 container's ZIP archive starts: the first ZIP local
+/// Where the 2026 container's ZIP archive starts: the first ZIP local
 /// file header within a few bytes after the string records (13 in every
 /// corpus/2026 file).
 pub(crate) fn zip_start(d: &[u8]) -> Option<usize> {

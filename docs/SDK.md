@@ -1,17 +1,20 @@
 # Using the OpenSKP SDK
 
-OpenSKP reads SketchUp `.skp` files — the 2017 format and the post-2017
-ZIP container that current releases (SketchUp 2026) save — without the
-Trimble SDK. The core is a pure-Rust library whose only dependency is a
+OpenSKP reads SketchUp `.skp` files without the Trimble SDK: the 2026
+container that every current release saves (`{26.x}`) and the 2017
+binary format of older files (`{17.x}`). Both come out as the same
+`Model`. The core is a pure-Rust library whose only dependency is a
 DEFLATE decoder; a CLI and a C ABI are built on top of it, and any
 language that can parse JSON can consume the C ABI's output.
 
-Read support covers the full 2017 surface validated by the test suite:
-concrete meshes (world-space capable), the component/group hierarchy with
-transforms, materials (solid and textured, including embedded images and
-per-corner UVs), layers, per-entity visibility, scenes, guides, attribute
-dictionaries, and annotations surfaced as counts and data. Writing `.skp`
-files is not supported (see `docs/DEVELOPMENT.md` for the parked design).
+Read support covers concrete meshes (world-space capable), the
+component/group hierarchy with transforms, materials (solid and textured,
+including embedded images and per-corner UVs), layers, per-entity
+visibility, scenes, guides, attribute dictionaries, annotations, and the
+document's settings, on both containers; the test suite checks every
+2026 corpus file against its 2017 original and against the COLLADA
+export both share. Writing `.skp` files is not supported (see
+`docs/DEVELOPMENT.md` for the parked design).
 
 ## The Rust crate
 
@@ -68,7 +71,7 @@ for run in &model.geometry {
 Each `Instance`/`PlacedInstance` carries the placing object's persistent
 id (`pid`) — the join key into `Scene::hidden_entities` — and, on the
 2017 continuous walk, its global store-map `slot`; `slot` is `None` on
-the legacy byte-scan path and on post-2017 files, and `pid` is `0` on
+the 2017 byte-scan fallback and on 2026 files, and `pid` is `0` on
 the legacy path. `GeometryRun` also carries `sections: Vec<SectionPlane>`
 — the section planes placed directly in that run, in the run's LOCAL
 frame (unit normal `plane[0..3]`, offset `plane[3]`, inches), read on
@@ -118,7 +121,7 @@ editing) and `fade_rest_of_model` / `fade_similar_components`
 style records — component editing isn't one of them — and
 `section_planes()` / `section_cuts()` decode the packed section-display
 bits. A `Style` pairs a `RenderingOptions` with its own `Watermark`s.
-2017 layout: `docs/SKP_FORMAT.md` §10.7; post-2017: §16.10.
+2026 records: `docs/SKP_FORMAT.md` §16.10; 2017 layout: §10.7.
 
 `Model::axes` is the model axes (`origin_m`, and unit vectors `x`, `y`,
 `z`), and `Model::text_defaults` / `Model::dimension_defaults` are the
@@ -148,7 +151,7 @@ themselves (`camera`, `rendering`, `style`, `shadows`, `axes`,
 `hidden_entities`, `active_section_planes`, `hidden_layers`,
 `in_animation`) — present exactly when `saved` reports that property.
 `hidden_layers` holds indices into `Model::layers` (2017 layout:
-`docs/SKP_FORMAT.md` §10.10; post-2017: §16.15). Code that only read
+`docs/SKP_FORMAT.md` §10.10; 2026: §16.15). Code that only read
 scene names now reads `scene.name` on each `Scene`.
 
 `Text` and `Dimension` are annotation entities (persistent id, an
@@ -174,25 +177,38 @@ map, which this path doesn't have).
 
 ### Error handling and diagnostics
 
-`Model::parse` fails only when the container is unrecognized or damaged
-(a post-2017 archive whose entries fail their CRC-32, or whose records
-do not tile), or when the process cannot allocate the continuous walk's
-in-memory store map for a very large 2017 file. That case returns an
-`Error` naming the file size instead of aborting the process — relevant
-to hosts with a fixed memory budget, such as wasm — with a message of
-the form `"out of memory while reading the model section at 0x… (N
-bytes in): the model is larger than this process can hold"`; the store
-map itself is released before texture extraction, to keep the peak
-below the model's final resident size. Everything else parses; anomalies are
-never silent — they land in `model.diagnostics` (resyncs, skipped
-records, filtered runs, fallback decisions). `openskp::header_info`
-identifies any SketchUp file's version (and, for 2013–2017 files, its
-model GUID), even ones the reader then refuses. `detect_container`
-tells the 2017 stream (`Container::Carchive2017`) from the post-2017 ZIP
-container (`Container::Zip`); both read to the same `Model`. A 2026
-file's `model_guid` is `None` (its header has none), its geometry-run
-offsets are positions in the archive's `model.dat`, and `images` lists
-every PNG/JPEG entry in the archive.
+`Model::parse` fails only when the container is unrecognized or
+unusable: a 2026 archive with no end-of-central-directory record, no
+`model.dat`, an empty or unreadable `model.dat` (its single top record
+cannot be framed) or an entry that fails its CRC-32; or a 2017 file whose
+header is not a `.skp`. Out of memory is an `Error`, not an abort, on both paths:
+the 2017 walk's store map and the 2026 reader's entry buffers are
+reserved fallibly, so a host with a fixed memory budget (wasm) gets a
+message such as `"out of memory while reading the model section at 0x…
+(N bytes in): the model is larger than this process can hold"`. The 2017
+store map is released before texture extraction, to keep the peak below
+the model's final resident size.
+
+Everything else parses, and anomalies are never silent: they land in
+`model.diagnostics`. On a 2026 file a damaged entity container, material
+or settings section is skipped and recorded as `Diagnostic::Skipped`
+(geometry before the damage survives), and a record tag the reader does
+not know at the top level of `model.dat` or among an entity container's
+children — where a newer release's additions would appear — is recorded
+as `Skipped { class: "unknown … record 0x…" }` rather than dropped;
+records inside settings sections are read by tag and unknown ones there
+are not reported. On a
+2017 file the diagnostics are resyncs, skipped records, filtered runs and
+fallback decisions.
+
+`openskp::header_info` identifies any SketchUp file's version (and, for
+2013–2017 files, its model GUID) from the header alone, even ones the
+reader then refuses. `detect_container` tells the 2026 container
+(`Container::Zip`) from the 2017 stream (`Container::Carchive2017`); both
+read to the same `Model`. A 2026 file's `model_guid` comes from
+`meta/meta.dat` and is new on every save, its geometry-run offsets are
+positions in the archive's `model.dat`, and `images` lists every PNG/JPEG
+entry in the archive.
 
 Pre-2017 files (2013–2016) parse header-level with recorded degradation;
 their body layouts are not decoded.

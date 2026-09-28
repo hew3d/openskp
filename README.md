@@ -1,11 +1,13 @@
 # OpenSKP
 
 **An open, clean-room reader and specification for the SketchUp `.skp`
-file format — the 2017 format and the current (2026) container.**
+file format: the 2026 container that current SketchUp saves, and the
+2017 binary format that older files still carry.**
 
 SketchUp's native format has no public specification and, until now, no
-open-source reader — the only way to read a `.skp` has been Trimble's
-proprietary SDK. OpenSKP documents the format and reads it natively:
+open-source reader; the only way to read a `.skp` has been Trimble's
+proprietary SDK. OpenSKP documents both containers and reads them into
+one model:
 
 - **A format specification** — [`docs/SKP_FORMAT.md`](docs/SKP_FORMAT.md)
   plus the Kaitai Struct grammar [`ksy/skp.ksy`](ksy/skp.ksy), detailed
@@ -29,18 +31,20 @@ in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## The format in one paragraph
 
-A `.skp` is a fixed header (UTF-16 string records, version, model GUID)
-followed by one uncompressed **MFC `CArchive` object stream** with a
-single shared object map. Geometry is a half-edge kernel (`CVertex` /
-`CEdge` / `CEdgeUse` / `CLoop` / `CFace`) in **f64 inches**; components
-and groups place shared definitions through 13-value transforms; textures
-map through per-face projective matrices. Classes are defined lazily
-inline, so class tags differ per file, and object references index the
-one global map. Newer releases (observed: SketchUp 2026) keep the header
-strings but replace the stream with a ZIP archive whose `model.dat` is a
-self-describing tree of tagged records carrying the same entities, ids,
-and transforms, with materials as XML plus image files. The full story is
-in [`docs/SKP_FORMAT.md`](docs/SKP_FORMAT.md).
+A current `.skp` (SketchUp 2026, `{26.x}`) is two UTF-16 string records
+followed by a ZIP archive. Its `model.dat` is a tree of tagged records
+(`u16 tag | u32 length | payload`) holding the entities, their persistent
+ids, transforms, and every document setting; materials are XML files next
+to their texture images. A 2017 `.skp` (`{17.x}`, the last free desktop
+release) is a fixed header followed by one uncompressed **MFC `CArchive`
+object stream** with a single shared object map, where classes are
+defined lazily inline and object references index that map. Both store
+the same model: a half-edge kernel (`CVertex` / `CEdge` / `CEdgeUse` /
+`CLoop` / `CFace`) in **f64 inches**, components and groups placing
+shared definitions through 13-value transforms, and textures mapped
+through per-face projective matrices. The full account is in
+[`docs/SKP_FORMAT.md`](docs/SKP_FORMAT.md): §16 for the 2026 container,
+§2–§13 for 2017.
 
 ## Quick start
 
@@ -48,8 +52,9 @@ in [`docs/SKP_FORMAT.md`](docs/SKP_FORMAT.md).
 git clone https://github.com/hew3d/openskp
 cd openskp
 
-cargo run -p openskp-cli --release -- model corpus/2017/house.skp
-cargo run -p openskp-cli --release -- mesh  corpus/2017/box.skp   # JSON out
+cargo run -p openskp-cli --release -- model corpus/2026/house-plus.skp
+cargo run -p openskp-cli --release -- mesh  corpus/2026/box.skp   # JSON out
+cargo run -p openskp-cli --release -- model corpus/2017/house.skp  # a 2017 file
 ```
 
 As a library:
@@ -95,18 +100,24 @@ cargo test --workspace --release     # the acceptance suite
 
 ## Scope
 
-- **Supported:** files saved by SketchUp 2017 (v17.x) — the last
-  release with a free desktop edition, so a large body of existing
-  free-edition models is in this format — and by SketchUp 2026
-  (`{26.x}`), the format current releases, including the free web app,
-  save. Each 2026 corpus file reads equivalent to its 2017 original in
-  geometry, scene, materials, layers, UVs, scenes, guides, and document
-  settings. The continuous walk also reads production-scale 2017 models
-  well beyond the corpus — multi-hundred-megabyte third-party files —
-  with no desync; a process that cannot hold the model gets a named
+- **SketchUp 2026 (`{26.x}`)**, the format every current release saves,
+  the free web app included. Every 2017 corpus file has a 2026 twin;
+  each twin reads equivalent to its original (geometry, hierarchy,
+  materials, layers, UVs, scenes, guides, document settings), and the
+  COLLADA-oracle tests run on both containers; the 2026 reader is the
+  faster and lighter of the two (a 122 MB
+  production model: 1.2 s and 384 MB as a 60 MB 2026 file, 2.2 s and
+  544 MB as the 2017 original). A damaged record is skipped and reported
+  as a diagnostic; a record tag this reader does not know, at the top
+  level or in an entity container, is reported rather than dropped.
+- **SketchUp 2017 (`{17.x}`)**, the last release with a free desktop
+  edition, so many existing models are in this format. The same model
+  comes out of either container. The 2017 walk reads production-scale
+  models well beyond the corpus (a 464 MB third-party house in 12 s and
+  2 GB) with no desync; a process that cannot hold the model gets a named
   out-of-memory error instead of aborting.
-- **Untested:** releases 2018–2025 are unobserved; files in the ZIP
-  container are read by the 2026 reader.
+- **Untested:** releases 2018–2025 are unobserved. Any file whose header
+  strings are followed by a ZIP archive is read as a 2026 file.
 - **Identified but degraded:** 2013–2016 saves parse header-level with
   loud diagnostics.
 - **Read-only:** writing `.skp` is a parked milestone
@@ -118,8 +129,9 @@ cargo test --workspace --release     # the acceptance suite
 docs/       SKP_FORMAT.md (the spec) · SDK.md (using the SDK) · DEVELOPMENT.md
 ksy/        skp.ksy — Kaitai Struct grammar (header + record catalogue)
 crates/     openskp (core library) · openskp-cli · openskp-capi (C ABI)
-corpus/     the evidence base: 2017 minimal pairs, legacy saves,
-            a full-scale third-party benchmark (see corpus/README.md)
+corpus/     the evidence base: 2026 saves and their 2017 originals as
+            minimal pairs, 2013–2016 saves, a full-scale third-party
+            benchmark in both containers (see corpus/README.md)
 tools/      Python analysis instruments and the frozen reference parser
 scripts/    verify.sh
 ```

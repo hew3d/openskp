@@ -14,8 +14,27 @@
 use std::path::PathBuf;
 
 fn corpus(name: &str) -> Vec<u8> {
+    corpus_at("2017", name)
+}
+
+/// A 2017 corpus file and its SketchUp 2026 twin (`corpus/2026/<name>`,
+/// the web app's conversion of the same model; the same expectations
+/// apply).
+fn twin_dirs(name: &str) -> Vec<&'static str> {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("../../corpus/2017");
+    p.push("../../corpus/2026");
+    p.push(name);
+    if p.exists() {
+        vec!["2017", "2026"]
+    } else {
+        vec!["2017"]
+    }
+}
+
+fn corpus_at(dir: &str, name: &str) -> Vec<u8> {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("../../corpus");
+    p.push(dir);
     p.push(name);
     std::fs::read(p).unwrap()
 }
@@ -155,11 +174,30 @@ fn q(p: [f64; 3]) -> [i64; 3] {
 
 /// Validate one pair. Returns `(faces checked, worst pin residual [in])`.
 /// `check_dae_uv = false` for the projective-pin files (baked exports).
+/// Runs `check_in` on the 2017 file and on its 2026 twin; both must match
+/// the same number of textured faces of the shared `.dae`.
 fn check(stem: &str, check_dae_uv: bool, tol: f64) -> (usize, f64) {
-    let skp = corpus(&format!("{stem}.skp"));
+    let mut out = None;
+    for dir in twin_dirs(&format!("{stem}.skp")) {
+        let r = check_in(dir, stem, check_dae_uv, tol);
+        match out {
+            None => out = Some(r),
+            Some((n, _)) => assert_eq!(
+                r.0, n,
+                "{stem}: the 2026 twin matched {} textured faces, the 2017 file {n}",
+                r.0
+            ),
+        }
+    }
+    out.unwrap()
+}
+
+fn check_in(dir: &str, stem: &str, check_dae_uv: bool, tol: f64) -> (usize, f64) {
+    let label = format!("{dir}/{stem}");
+    let skp = corpus_at(dir, &format!("{stem}.skp"));
     let model = openskp::Model::parse(&skp).expect("parse");
     let dae = dae_textured(&format!("{stem}.dae"));
-    assert!(!dae.is_empty(), "{stem}: no textured .dae faces");
+    assert!(!dae.is_empty(), "{label}: no textured .dae faces");
 
     let mut checked = 0;
     let mut worst_pin = 0.0f64;
@@ -207,7 +245,7 @@ fn check(stem: &str, check_dae_uv: bool, tol: f64) -> (usize, f64) {
                         let got = x.apply(*p);
                         assert!(
                             (got[0] - uv[0]).abs() < tol && (got[1] - uv[1]).abs() < tol,
-                            "{stem} pid {}: uv {:?} != dae {:?} (side {side:?})",
+                            "{label} pid {}: uv {:?} != dae {:?} (side {side:?})",
                             f.pid,
                             got,
                             uv
@@ -219,7 +257,7 @@ fn check(stem: &str, check_dae_uv: bool, tol: f64) -> (usize, f64) {
     }
     assert!(
         checked > 0,
-        "{stem}: no skp face matched a textured dae face"
+        "{label}: no skp face matched a textured dae face"
     );
     (checked, worst_pin)
 }
@@ -260,18 +298,20 @@ fn projective_pin_files_reproduce_pins_exactly() {
 fn png_texture_applied_size_is_36in() {
     // §4v: subtype-4 (PNG) dib payloads are followed by w/h directly —
     // the JPEG-shaped read used to report 0×0 here.
-    let model = openskp::Model::parse(&corpus("png-texture.skp")).unwrap();
-    let m = model
-        .materials
-        .iter()
-        .find_map(|m| match m {
-            openskp::Material::Textured {
-                name,
-                applied_size_in,
-                ..
-            } if name == "TextureWithAlpha" => Some(*applied_size_in),
-            _ => None,
-        })
-        .expect("TextureWithAlpha present");
-    assert_eq!(m, Some((36.0, 36.0)));
+    for dir in twin_dirs("png-texture.skp") {
+        let model = openskp::Model::parse(&corpus_at(dir, "png-texture.skp")).unwrap();
+        let m = model
+            .materials
+            .iter()
+            .find_map(|m| match m {
+                openskp::Material::Textured {
+                    name,
+                    applied_size_in,
+                    ..
+                } if name == "TextureWithAlpha" => Some(*applied_size_in),
+                _ => None,
+            })
+            .expect("TextureWithAlpha present");
+        assert_eq!(m, Some((36.0, 36.0)), "{dir}");
+    }
 }

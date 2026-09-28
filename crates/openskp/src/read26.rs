@@ -1,4 +1,4 @@
-//! Reader for the post-2017 `.skp` container (SketchUp 2026, `{26.x}`;
+//! Reader for the 2026 `.skp` container (SketchUp 2026, `{26.x}`;
 //! SKP_FORMAT §16). Derived from the corpus/2026 saves against their
 //! decoded 2017 originals: entities keep their persistent ids across the
 //! conversion, so every field below is pinned to a known 2017 value.
@@ -45,6 +45,8 @@ pub(crate) fn records(data: &[u8], base: usize) -> Result<Vec<Rec<'_>>, Error> {
             .checked_add(len)
             .and_then(|end| data.get(o + 6..end))
             .ok_or_else(|| err(base + o, &format!("record {tag:#06x} overruns its parent")))?;
+        out.try_reserve(1)
+            .map_err(|_| err(base + o, "out of memory while listing records"))?;
         out.push(Rec {
             tag,
             data: body,
@@ -55,8 +57,65 @@ pub(crate) fn records(data: &[u8], base: usize) -> Result<Vec<Rec<'_>>, Error> {
     Ok(out)
 }
 
+/// Every top-level record tag observed (§16.3). A record outside this
+/// list — a newer release's addition — is reported, never dropped silently.
+const KNOWN_TOP: &[u16] = &[
+    0x0063, 0x01F5, 0x01F6, 0x01F7, 0x01F8, 0x01F9, 0x01FA, 0x01FB, 0x01FC, 0x01FD, 0x01FE, 0x01FF,
+    0x0200, 0x0201, 0x0203, 0x0204, 0x0205, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A, 0x020C, 0x020D,
+    0x020E, 0x020F, 0x0210, 0x0213, 0x0214,
+];
+
+/// Every child tag of an entity container observed (§16.4).
+const KNOWN_CONTAINER: &[u16] = &[
+    0x07D0, 0x1389, 0x138A, 0x138B, 0x138C, 0x138D, 0x138E, 0x1390, 0x1391, 0x1392, 0x1393, 0x1394,
+    0x1396, 0x1397, 0x1398, 0x1399, 0x139B, 0x139E, 0x139F, 0x13A0,
+];
+
+/// A pool of entities under `n`, read up to the first damaged record; the
+/// damage is recorded. `None` when the pool is absent.
+fn pool<'a>(n: &Node<'a>, tag: u16, diags: &mut Vec<Diagnostic>) -> Option<Node<'a>> {
+    let r = n.get(tag)?;
+    let (node, damaged) = Node::of_lenient(r);
+    if let Some(at) = damaged {
+        diags.push(Diagnostic::Skipped {
+            class: format!("damaged pool {tag:#06x}"),
+            at,
+            bytes: r.off + r.data.len() - at,
+        });
+    }
+    Some(node)
+}
+
+/// A section's list node reached through `path`, each level read up to
+/// the first damaged record (recorded). `None` when absent.
+fn section<'a>(
+    top: &Node<'a>,
+    tag: u16,
+    path: &[u16],
+    diags: &mut Vec<Diagnostic>,
+) -> Option<Node<'a>> {
+    let mut node = pool(top, tag, diags)?;
+    for &t in path {
+        node = pool(&node, t, diags)?;
+    }
+    Some(node)
+}
+
+/// Record any child of `n` whose tag is not in `known`.
+fn report_unknown(n: &Node<'_>, known: &[u16], where_: &str, diags: &mut Vec<Diagnostic>) {
+    for k in &n.kids {
+        if !known.contains(&k.tag) {
+            diags.push(Diagnostic::Skipped {
+                class: format!("unknown {where_} record {:#06x}", k.tag),
+                at: k.off - 6,
+                bytes: k.data.len() + 6,
+            });
+        }
+    }
+}
+
 pub(crate) fn err(at: usize, what: &str) -> Error {
-    Error(format!("post-2017 model.dat @{at:#x}: {what}"))
+    Error(format!("2026 model.dat @{at:#x}: {what}"))
 }
 
 /// A container record's children.
@@ -73,6 +132,44 @@ impl<'a> Node<'a> {
             len: r.data.len(),
             kids: records(r.data, r.off)?,
         })
+    }
+    /// The children up to the first damaged record header, and the offset
+    /// of the damage when there is one. Entity containers are read this
+    /// way so a damaged model still yields everything before the damage,
+    /// with the loss recorded as a diagnostic.
+    pub(crate) fn of_lenient(r: Rec<'a>) -> (Node<'a>, Option<usize>) {
+        let mut kids = Vec::new();
+        let mut o = 0usize;
+        let damaged = loop {
+            if o >= r.data.len() {
+                break None;
+            }
+            let Some(head) = r.data.get(o..o + 6) else {
+                break Some(r.off + o);
+            };
+            let tag = u16::from_le_bytes([head[0], head[1]]);
+            let len = u32::from_le_bytes([head[2], head[3], head[4], head[5]]) as usize;
+            let Some(body) = (o + 6).checked_add(len).and_then(|e| r.data.get(o + 6..e)) else {
+                break Some(r.off + o);
+            };
+            if kids.try_reserve(1).is_err() {
+                break Some(r.off + o);
+            }
+            kids.push(Rec {
+                tag,
+                data: body,
+                off: r.off + o + 6,
+            });
+            o += 6 + len;
+        };
+        (
+            Node {
+                at: r.off,
+                len: r.data.len(),
+                kids,
+            },
+            damaged,
+        )
     }
     pub(crate) fn get(&self, tag: u16) -> Option<Rec<'a>> {
         self.kids.iter().copied().find(|r| r.tag == tag)
@@ -453,10 +550,11 @@ fn container(
     s: &Slots,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<Built, Error> {
+    report_unknown(n, KNOWN_CONTAINER, "entity container", diags);
     // Vertices, keyed by persistent id.
     let mut vindex: HashMap<u32, u32> = HashMap::new();
     let mut vertices = Vec::new();
-    if let Some(pool) = n.node(VERTICES)? {
+    if let Some(pool) = pool(n, VERTICES, diags) {
         for v in pool.nodes(VERTEX)? {
             let p: [f64; 3] = f64s(v.get(VERTEX_POINT), v.at)?;
             vindex.insert(entity_id(&v)?, vertices.len() as u32);
@@ -468,7 +566,7 @@ fn container(
     let (mut con, mut sat) = (0usize, 0usize);
     let mut edges = Vec::new();
     let mut ends: HashMap<u32, (u32, u32)> = HashMap::new();
-    if let Some(pool) = n.node(EDGES)? {
+    if let Some(pool) = pool(n, EDGES, diags) {
         for e in pool.nodes(EDGE)? {
             let h = drawing(&e)?;
             let (a, b) = (uint(e.get(EDGE_START)), uint(e.get(EDGE_END)));
@@ -499,7 +597,7 @@ fn container(
         }
     }
     let mut sections = Vec::new();
-    if let Some(pool) = n.node(SECTION_PLANES)? {
+    if let Some(pool) = pool(n, SECTION_PLANES, diags) {
         for sp in pool.nodes(SECTION_PLANE)? {
             let h = drawing(&sp)?;
             sections.push(SectionPlane {
@@ -511,7 +609,7 @@ fn container(
     }
     let (mut loops, mut uses) = (0usize, 0usize);
     let mut faces = Vec::new();
-    if let Some(pool) = n.node(FACES)? {
+    if let Some(pool) = pool(n, FACES, diags) {
         for f in pool.nodes(FACE)? {
             let h = drawing(&f)?;
             let plane: [f64; 4] = f64s(f.get(FACE_PLANE), f.at)?;
@@ -565,7 +663,17 @@ fn container(
                 back_material: s.material(uint(f.get(FACE_BACK_MATERIAL))),
                 hidden: h.flags & 0x01 != 0,
                 layer: s.layer(h.layer),
-                texture: texture(h.attrs)?.map(Box::new),
+                texture: match texture(h.attrs) {
+                    Ok(t) => t.map(Box::new),
+                    Err(_) => {
+                        diags.push(Diagnostic::Skipped {
+                            class: "face texture".into(),
+                            at: f.at,
+                            bytes: f.len,
+                        });
+                        None
+                    }
+                },
             });
         }
     }
@@ -592,32 +700,36 @@ fn container(
         instances.push((p, x.at, text(x.get(INSTANCE_NAME))));
         Ok(())
     };
-    if let Some(pool) = n.node(COMPONENTS)? {
+    if let Some(pool) = pool(n, COMPONENTS, diags) {
         for x in pool.nodes(INSTANCE)? {
             place(&x, false)?;
         }
     }
-    if let Some(pool) = n.node(GROUPS)? {
+    if let Some(pool) = pool(n, GROUPS, diags) {
         for g in pool.nodes(GROUP)? {
             place(&g.need(INSTANCE)?, true)?;
         }
     }
     let mut guides = Vec::new();
-    if let Some(pool) = n.node(GUIDE_LINES)? {
+    if let Some(pool) = pool(n, GUIDE_LINES, diags) {
         for g in pool.nodes(GUIDE_LINE)? {
             let v: [f64; 8] = f64s(g.get(GUIDE_LINE_GEOMETRY), g.at)?;
             // Rounded like the 2017 path's guides.
             let r5 = |x: f64| (x * 1e5).round() / 1e5;
             guides.push(Guide {
+                def_index: def.map(|d| d as usize),
                 point_m: [r5(v[0] / INCH), r5(v[1] / INCH), r5(v[2] / INCH)],
                 direction: [r5(v[3]), r5(v[4]), r5(v[5])],
             });
         }
     }
-    let count =
-        |tag: u16| -> Result<usize, Error> { Ok(n.node(tag)?.map(|p| p.kids.len()).unwrap_or(0)) };
+    let count = |tag: u16| -> Result<usize, Error> {
+        Ok(n.get(tag)
+            .map(|r| Node::of_lenient(r).0.kids.len())
+            .unwrap_or(0))
+    };
     let mut curve_members = Vec::new();
-    if let Some(pool) = n.node(PLAIN_CURVES)? {
+    if let Some(pool) = pool(n, PLAIN_CURVES, diags) {
         for c in pool.nodes(CURVE)? {
             curve_members.push(uint(c.get(CURVE_MEMBERS)).unwrap_or(0));
         }
@@ -727,7 +839,15 @@ fn attributes(r: Rec<'_>, out: &mut Vec<Attribute>, depth: u32) -> Result<(), Er
 
 // ---------------------------------------------------------------- model
 
-/// Parse a post-2017 file. `version` is the header's version string.
+/// The model GUID from `meta/meta.dat` (§16.1): a `0x64` container whose
+/// `0x66` record holds 16 bytes.
+fn meta_guid(m: &[u8]) -> Option<String> {
+    let top = *records(m, 0).ok()?.first()?;
+    let g = Node::of(top).ok()?.get(0x66)?.data;
+    (g.len() == 16).then(|| g.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Parse a 2026-container file. `version` is the header's version string.
 pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
     let start =
         crate::ctx::zip_start(d).ok_or_else(|| Error("no ZIP archive after the header".into()))?;
@@ -735,12 +855,29 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
     let dat = zip
         .read("model.dat")
         .map_err(Error)?
-        .ok_or_else(|| Error("post-2017 container without model.dat".into()))?;
+        .ok_or_else(|| Error("2026 container without model.dat".into()))?;
     let top_rec = *records(&dat, 0)?
         .first()
         .ok_or_else(|| err(0, "empty model.dat"))?;
-    let top = Node::of(top_rec)?;
     let mut diagnostics = Vec::new();
+    // The top-level list is read up to the first damaged record header;
+    // every section before the damage is still there to be found by tag.
+    let (top, damaged) = Node::of_lenient(top_rec);
+    if let Some(at) = damaged {
+        diagnostics.push(Diagnostic::Skipped {
+            class: "damaged top-level records".into(),
+            at,
+            bytes: top_rec.off + top_rec.data.len() - at,
+        });
+    }
+    report_unknown(&top, KNOWN_TOP, "top-level", &mut diagnostics);
+    // `meta/meta.dat` shares the record format; its `0x66` record is the
+    // model GUID (§16.1), new on every conversion.
+    let model_guid = zip
+        .read("meta/meta.dat")
+        .ok()
+        .flatten()
+        .and_then(|m| meta_guid(&m));
 
     // Materials (dense slots 1..), layers (slot 0 = the default layer, the
     // list's first entry, as on the 2017 path).
@@ -750,35 +887,63 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
         layer: HashMap::new(),
         definition_name: HashMap::new(),
     };
-    if let Some(sec) = top.node(MATERIALS)? {
-        for rec in sec.need(0x30D4)?.need(0x30D5)?.nodes(0x32C8)? {
-            let (id, m) = material(&zip, &rec, &mut diagnostics)?;
+    // A damaged material list keeps the materials before the damage; a
+    // damaged material is skipped. Faces that used one fall back to the
+    // default material. Both are recorded.
+    if let Some(list) = section(&top, MATERIALS, &[0x30D4, 0x30D5], &mut diagnostics) {
+        for r in list.all(0x32C8) {
+            let Ok((id, m)) = Node::of(r).and_then(|rec| material(&zip, &rec, &mut diagnostics))
+            else {
+                diagnostics.push(Diagnostic::Skipped {
+                    class: "material".into(),
+                    at: r.off - 6,
+                    bytes: r.data.len() + 6,
+                });
+                continue;
+            };
             slots.material.insert(id, materials.len() as u16 + 1);
             materials.push(m);
         }
     }
     let material_links = (0..materials.len()).map(|i| (i as u16 + 1, i)).collect();
     let mut layers = Vec::new();
-    if let Some(sec) = top.node(LAYERS)? {
-        for l in sec.need(0x3A98)?.need(0x3A99)?.nodes(0x3C8C)? {
-            let id = entity_id(&l)?;
-            // 0x3c8f embeds the layer's colour material, Layer_<name>.
-            let rgba = match l.get(0x3C8F) {
-                Some(r) => match Node::of(r)?.node(0x32C8)? {
-                    Some(m) => match material(&zip, &m, &mut diagnostics)?.1 {
-                        Material::Solid { rgba, .. } => [rgba[0], rgba[1], rgba[2], 255],
-                        Material::Textured { .. } => [0, 0, 0, 255],
+    if let Some(list) = section(&top, LAYERS, &[0x3A98, 0x3A99], &mut diagnostics) {
+        for r in list.all(0x3C8C) {
+            // A damaged layer is skipped and recorded; entities on it fall
+            // back to the default layer.
+            let layer = (|| -> Result<(u32, Layer), Error> {
+                let l = Node::of(r)?;
+                let id = entity_id(&l)?;
+                // 0x3c8f embeds the layer's colour material, Layer_<name>.
+                let rgba = match l.get(0x3C8F) {
+                    Some(r) => match Node::of(r)?.node(0x32C8)? {
+                        Some(m) => match material(&zip, &m, &mut diagnostics)?.1 {
+                            Material::Solid { rgba, .. } => [rgba[0], rgba[1], rgba[2], 255],
+                            Material::Textured { .. } => [0, 0, 0, 255],
+                        },
+                        None => [0, 0, 0, 255],
                     },
                     None => [0, 0, 0, 255],
-                },
-                None => [0, 0, 0, 255],
+                };
+                Ok((
+                    id,
+                    Layer {
+                        name: text(l.get(0x3C8D)),
+                        visible: uint(l.get(0x3C8E)).unwrap_or(0) == 0,
+                        rgba,
+                    },
+                ))
+            })();
+            let Ok((id, layer)) = layer else {
+                diagnostics.push(Diagnostic::Skipped {
+                    class: "layer".into(),
+                    at: r.off - 6,
+                    bytes: r.data.len() + 6,
+                });
+                continue;
             };
             slots.layer.insert(id, layers.len() as u16 + 1);
-            layers.push(Layer {
-                name: text(l.get(0x3C8D)),
-                visible: uint(l.get(0x3C8E)).unwrap_or(0) == 0,
-                rgba,
-            });
+            layers.push(layer);
         }
     }
     let mut layer_links = Vec::new();
@@ -789,11 +954,43 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
 
     // Definitions: id -> name first, so instance links resolve anywhere.
     let mut defs = Vec::new();
-    if let Some(sec) = top.node(DEFINITIONS)? {
-        for list in sec.nodes(0x1770)? {
-            for d in list.need(0x1771)?.nodes(DEFINITION)? {
-                let ents = d.need(ENTITIES)?;
-                let id = drawing(&ents)?.id;
+    if let Some(sec) = pool(&top, DEFINITIONS, &mut diagnostics) {
+        for lrec in sec.all(0x1770) {
+            let Some(list) = pool(&Node::of_lenient(lrec).0, 0x1771, &mut diagnostics) else {
+                continue;
+            };
+            for drec in list.all(DEFINITION) {
+                // A definition whose record list is damaged keeps what
+                // precedes the damage; the loss is recorded.
+                let (d, damaged) = Node::of_lenient(drec);
+                if let Some(at) = damaged {
+                    diagnostics.push(Diagnostic::Skipped {
+                        class: "damaged definition".into(),
+                        at,
+                        bytes: drec.off + drec.data.len() - at,
+                    });
+                }
+                let ents_rec = d
+                    .get(ENTITIES)
+                    .ok_or_else(|| err(d.at, &format!("missing record {ENTITIES:#06x}")))?;
+                let (ents, damaged) = Node::of_lenient(ents_rec);
+                if let Some(at) = damaged {
+                    diagnostics.push(Diagnostic::Skipped {
+                        class: "damaged entity container".into(),
+                        at,
+                        bytes: ents_rec.off + ents_rec.data.len() - at,
+                    });
+                }
+                // Without its entity base the container has no identity to
+                // link instances to: skip the definition, recorded.
+                let Ok(id) = drawing(&ents).map(|h| h.id) else {
+                    diagnostics.push(Diagnostic::Skipped {
+                        class: "damaged entity container".into(),
+                        at: ents_rec.off,
+                        bytes: ents_rec.data.len(),
+                    });
+                    continue;
+                };
                 let guid: String = d
                     .get(DEFINITION_GUID)
                     .map(|g| g.data.iter().map(|b| format!("{b:02x}")).collect())
@@ -802,7 +999,17 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
                 slots
                     .definition_name
                     .insert(id, text(d.get(DEFINITION_NAME)));
-                let behaviour = crate::settings26::behaviour(&d)?;
+                let behaviour = match crate::settings26::behaviour(&d) {
+                    Ok(b) => b,
+                    Err(_) => {
+                        diagnostics.push(Diagnostic::Skipped {
+                            class: "definition behaviour".into(),
+                            at: drec.off - 6,
+                            bytes: drec.data.len() + 6,
+                        });
+                        Default::default()
+                    }
+                };
                 let timestamp = uint(d.get(0x1581)).unwrap_or(0);
                 defs.push((
                     id,
@@ -846,7 +1053,17 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
         guides.extend(b.guides);
         geometry.push(b.run);
     };
-    let (fonts, font_ids) = crate::settings26::fonts(&top)?;
+    let (fonts, font_ids) = match crate::settings26::fonts(&top) {
+        Ok(f) => f,
+        Err(_) => {
+            diagnostics.push(Diagnostic::Skipped {
+                class: "fonts section".into(),
+                at: top.get(0x01FD).map(|r| r.off - 6).unwrap_or(top.at),
+                bytes: top.get(0x01FD).map(|r| r.data.len() + 6).unwrap_or(0),
+            });
+            (Vec::new(), HashMap::new())
+        }
+    };
     let mut texts = Vec::new();
     let mut dimensions = Vec::new();
     for (id, name, guid, ents, rec, behaviour, timestamp) in &defs {
@@ -858,59 +1075,180 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
             timestamp: *timestamp,
             map_index: Some(*id as usize),
         });
-        texts.extend(crate::settings26::texts(ents, &font_ids)?);
-        dimensions.extend(crate::settings26::dimensions(ents, &font_ids)?);
+        // Annotations and geometry of a damaged container are skipped and
+        // recorded, as a 2017 desync is.
+        let skipped = |diagnostics: &mut Vec<Diagnostic>| {
+            diagnostics.push(Diagnostic::Skipped {
+                class: "entity container".into(),
+                at: rec.off,
+                bytes: rec.data.len(),
+            })
+        };
+        match (
+            crate::settings26::texts(ents, &font_ids),
+            crate::settings26::dimensions(ents, &font_ids),
+        ) {
+            (Ok(t), Ok(dm)) => {
+                texts.extend(t);
+                dimensions.extend(dm);
+            }
+            _ => {
+                skipped(&mut diagnostics);
+                continue;
+            }
+        }
         // A definition's run spans its entity container in model.dat.
-        let b = container(
+        match container(
             ents,
             rec.off,
             rec.off + rec.data.len(),
             Some(*id),
             &slots,
             &mut diagnostics,
-        )?;
-        take(b, &mut geometry);
+        ) {
+            Ok(b) => take(b, &mut geometry),
+            Err(_) => skipped(&mut diagnostics),
+        }
     }
     definition_links.sort_unstable();
     // The root run's span is empty: `Model::scene` treats instances lying
     // outside every run as scene roots, exactly the root's instances.
-    let root = top.need(ROOT)?.need(ENTITIES)?;
-    let b = container(&root, root.at, root.at, None, &slots, &mut diagnostics)?;
-    take(b, &mut geometry);
+    // The model's own entities. A file whose damage swallowed the root
+    // section still yields its definitions; the missing root is recorded.
+    let root_rec = pool(&top, ROOT, &mut diagnostics).and_then(|r| r.get(ENTITIES));
+    if let Some(root_rec) = root_rec {
+        let (root, damaged) = Node::of_lenient(root_rec);
+        if let Some(at) = damaged {
+            diagnostics.push(Diagnostic::Skipped {
+                class: "damaged entity container".into(),
+                at,
+                bytes: root_rec.off + root_rec.data.len() - at,
+            });
+        }
+        match container(&root, root.at, root.at, None, &slots, &mut diagnostics) {
+            Ok(b) => take(b, &mut geometry),
+            Err(_) => diagnostics.push(Diagnostic::Skipped {
+                class: "root entity container".into(),
+                at: root.at,
+                bytes: root.len,
+            }),
+        }
 
-    texts.extend(crate::settings26::texts(&root, &font_ids)?);
-    dimensions.extend(crate::settings26::dimensions(&root, &font_ids)?);
+        match (
+            crate::settings26::texts(&root, &font_ids),
+            crate::settings26::dimensions(&root, &font_ids),
+        ) {
+            (Ok(t), Ok(dm)) => {
+                texts.extend(t);
+                dimensions.extend(dm);
+            }
+            _ => diagnostics.push(Diagnostic::Skipped {
+                class: "root entity container".into(),
+                at: root.at,
+                bytes: root.len,
+            }),
+        }
+    } else {
+        diagnostics.push(Diagnostic::Skipped {
+            class: "root entity container missing".into(),
+            at: top.at,
+            bytes: 0,
+        });
+    }
 
-    let camera = match top.node(0x01FA)? {
-        Some(c) => Some(crate::settings26::camera(&c.need(0x34BC)?)?),
-        None => None,
+    // A damaged settings section is left empty and recorded; the model's
+    // geometry does not depend on it.
+    let mut lenient = |section: &str, tag: u16, ok: bool| {
+        if !ok {
+            let r = top.get(tag);
+            diagnostics.push(Diagnostic::Skipped {
+                class: format!("{section} section"),
+                at: r.map(|r| r.off).unwrap_or(top.at),
+                bytes: r.map(|r| r.data.len()).unwrap_or(0),
+            });
+        }
     };
-    let rendering = match top.node(0x01FB)? {
-        Some(r) => Some(crate::settings26::rendering(&r.need(0x733C)?)),
-        None => None,
+
+    let camera = match top.node(0x01FA).and_then(|n| {
+        n.map(|c| crate::settings26::camera(&c.need(0x34BC)?))
+            .transpose()
+    }) {
+        Ok(c) => c,
+        Err(_) => {
+            lenient("camera", 0x01FA, false);
+            None
+        }
     };
-    let shadows = match top.node(0x0204)? {
-        Some(s) => Some(crate::settings26::shadow(&s.need(0x6590)?)?),
-        None => None,
+    let rendering = match top.node(0x01FB).and_then(|n| {
+        n.map(|r| Ok(crate::settings26::rendering(&r.need(0x733C)?)))
+            .transpose()
+    }) {
+        Ok(r) => r,
+        Err(_) => {
+            lenient("rendering", 0x01FB, false);
+            None
+        }
     };
-    let st = crate::settings26::styles(&top, &zip)?;
+    let shadows = match top.node(0x0204).and_then(|n| {
+        n.map(|s| crate::settings26::shadow(&s.need(0x6590)?))
+            .transpose()
+    }) {
+        Ok(s) => s,
+        Err(_) => {
+            lenient("shadows", 0x0204, false);
+            None
+        }
+    };
+    let st = match crate::settings26::styles(&top, &zip) {
+        Ok(st) => st,
+        Err(_) => {
+            lenient("styles", 0x0206, false);
+            Default::default()
+        }
+    };
     let layer_index: HashMap<u32, usize> = slots
         .layer
         .iter()
         .map(|(id, i)| (*id, *i as usize - 1))
         .collect();
-    let scenes = crate::settings26::scenes(&top, &st.names, &layer_index)?;
-    let axes = match top.node(0x01FC)? {
-        Some(a) => Some(crate::settings26::axes(&a.need(0x4650)?)?),
-        None => None,
+    let scenes = match crate::settings26::scenes(&top, &st.names, &layer_index) {
+        Ok(s) => s,
+        Err(_) => {
+            lenient("scenes", 0x0207, false);
+            Vec::new()
+        }
     };
-    let text_defaults = crate::settings26::text_defaults(&top, &font_ids)?;
-    let dimension_defaults = crate::settings26::dimension_defaults(&top, &font_ids)?;
+    let axes = match top.node(0x01FC).and_then(|n| {
+        n.map(|a| crate::settings26::axes(&a.need(0x4650)?))
+            .transpose()
+    }) {
+        Ok(a) => a,
+        Err(_) => {
+            lenient("axes", 0x01FC, false);
+            None
+        }
+    };
+    let text_defaults = match crate::settings26::text_defaults(&top, &font_ids) {
+        Ok(t) => t,
+        Err(_) => {
+            lenient("text defaults", 0x01FE, false);
+            None
+        }
+    };
+    let dimension_defaults = match crate::settings26::dimension_defaults(&top, &font_ids) {
+        Ok(t) => t,
+        Err(_) => {
+            lenient("dimension defaults", 0x01FF, false);
+            None
+        }
+    };
     let anti_aliased_textures = uint(top.get(0x020C)).map(|v| v != 0);
 
     let mut attrs = Vec::new();
     for k in &top.kids {
-        attributes(*k, &mut attrs, 0)?;
+        if attributes(*k, &mut attrs, 0).is_err() {
+            lenient("attributes", k.tag, false);
+        }
     }
 
     // Embedded images: every PNG/JPEG in the archive (thumbnails, textures).
@@ -945,7 +1283,7 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
     Ok(Model {
         container: crate::ctx::Container::Zip,
         version,
-        model_guid: None,
+        model_guid,
         definitions,
         instances,
         geometry,

@@ -1,13 +1,14 @@
 # openskp
 
-Clean-room reader for the SketchUp `.skp` format — the 2017 binary
-format and the post-2017 ZIP container. Reads meshes, materials (solid
-and textured, including embedded images and per-corner UVs), the
-component/group hierarchy with transforms, layers, scenes, guides,
-attribute dictionaries, and the document's settings (camera, rendering
-options, shadows, units, styles and watermarks, fonts, and text/
-dimension annotations) — with zero runtime dependencies and **no
-Trimble SDK anywhere in its lineage**.
+Clean-room reader for the SketchUp `.skp` format: the 2026 container
+that current SketchUp saves, and the 2017 binary format of older files.
+Reads meshes, materials (solid and textured, including embedded images
+and per-corner UVs), the component/group hierarchy with transforms,
+layers, scenes, guides, attribute dictionaries, and the document's
+settings (camera, rendering options, shadows, units, styles and
+watermarks, fonts, and text/dimension annotations), with one runtime
+dependency (a DEFLATE decoder) and **no Trimble SDK anywhere in its
+lineage**.
 
 Every format fact derives from observed `.skp` files, their COLLADA
 exports, and public knowledge of MFC `CArchive` serialization. The
@@ -37,14 +38,17 @@ inherited materials, and visibility. Coordinates are exposed in metres
 (`openskp::INCH` converts from the file's f64 inches). `header_info`
 identifies any `.skp` from its header alone.
 
-**Supported:** SketchUp's 2017 classic binary format (internally
-versioned `{17.x}`), the format of the last free desktop edition, and the
-post-2017 ZIP container that current releases save (observed: SketchUp
-2026, `{26.x}`; 2018–2025 untested). Both produce the same `Model`. The
-continuous walk reads production-scale 2017 models well beyond the
-corpus — multi-hundred-megabyte third-party files — with no desync;
-a process too small to hold the model gets a named out-of-memory error
-instead of aborting. Writing `.skp` is not supported.
+**Supported:** SketchUp 2026 files (`{26.x}`, the format every current
+release saves) and SketchUp 2017 files (`{17.x}`, the last free desktop
+edition). Both produce the same `Model`; every 2017 corpus file has a
+2026 twin that reads equivalent to it, and the COLLADA-oracle tests run
+on both containers.
+Releases 2018–2025 are untested; a file whose header strings are
+followed by a ZIP archive is read as a 2026 file. Production-scale
+models read on both paths (a 464 MB 2017 house in 12 s and 2 GB); a
+process too small to hold a model gets a named out-of-memory error
+instead of aborting, and a damaged record is skipped and reported rather
+than failing the file. Writing `.skp` is not supported.
 
 See [`docs/SDK.md`](https://github.com/hew3d/openskp/blob/main/docs/SDK.md)
 for the full guide, and the companion crates

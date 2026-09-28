@@ -18,7 +18,7 @@ and pinned texture projections on real faces.
 | `theater-2017.skp` | the model |
 | `theater-2017.dae` | its COLLADA export ("Export Hidden Geometry" enabled), the equivalence oracle |
 | `theater-2017-stats.txt` | SketchUp's own entity statistics for cross-checking totals |
-| `theater-2026.skp` | the same model in SketchUp 2026's format (`{26.2.0}`), converted as described in [`../2026/README.md`](../2026/README.md); read by the post-2017 reader, it meets the same COLLADA oracle |
+| `theater-2026.skp` | the same model in SketchUp 2026's format (`{26.2.0}`), converted as described in [`../2026/README.md`](../2026/README.md); read as a 2026 file, it meets the same COLLADA oracle |
 
 Scale: 72,074 edges, 27,594 faces, 497 component instances, 920 groups,
 149 component definitions, 94 layers, 78 materials. The model's textures

@@ -46,7 +46,7 @@ pub fn parse_header(d: &[u8]) -> Option<Header> {
 }
 
 /// Offset just past the two leading string records (document type and
-/// version) — where the post-2017 container's ZIP archive follows.
+/// version) — where the 2026 container's ZIP archive follows.
 pub(crate) fn strings_end(d: &[u8]) -> Option<usize> {
     let (_model_tag, off) = read_str_record(d, 0)?;
     let (_version, off) = read_str_record(d, off)?;

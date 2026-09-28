@@ -330,7 +330,7 @@ fn watermark_at(d: &[u8], i: usize, background: bool) -> Option<(Watermark, usiz
     };
     // The 2017 record keeps the aspect-ratio byte set while the wizard
     // hides the control; the flag only means anything for a stretched
-    // watermark, as the post-2017 conversion also decides (§10.8).
+    // watermark, as the 2026 conversion also decides (§10.8).
     let stretched = b[1] != 0;
     Some((
         Watermark {

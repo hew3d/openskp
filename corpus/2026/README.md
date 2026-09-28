@@ -1,12 +1,14 @@
 # corpus/2026 — SketchUp 2026 saves
 
-Models from the 2017 corpus saved again in SketchUp 2026's format
-(`{26.2.0}`). Current SketchUp releases, the free web app included, save
-only newer formats, so this is the evidence base for the post-2017
-reader (`docs/SKP_FORMAT.md` §16). `crates/openskp/tests/read26.rs`
-checks every file here equivalent to its 2017 original — geometry,
-scene, materials, layers, UVs, scenes, guides and document settings — and
-`tools/skp26_check.py` does the same from the Python instrument.
+The evidence base for the 2026 container (`docs/SKP_FORMAT.md` §16),
+the format every current SketchUp release saves, the free web app
+included. Every model of the 2017 corpus is here as saved by SketchUp
+2026 (`{26.2.0}`), so its fully decoded 2017 original pins every value.
+`crates/openskp/tests/read26.rs` checks every file here equivalent to its
+2017 original — geometry, scene, materials, layers, UVs, scenes, guides
+and document settings — and the COLLADA-oracle tests run on these files
+as well as on the originals; `tools/skp26_check.py` does the equivalence
+check from the Python instrument.
 
 Each converted file is the same model as a fully decoded 2017 file, so
 that file's decode (and its `.dae`, where one exists) is the ground truth
@@ -33,6 +35,60 @@ two by their coordinates. No separate `.dae` is kept here.
 | `component-axes.skp` | [`../2017/component-axes.skp`](../2017/component-axes.skp) | Component axes shown: `0x7349` 1 (§16.10). |
 | `animation.skp` | [`../2017/animation.skp`](../2017/animation.skp) | A 5-second scene transition: `TransitionTime` (§16.12). |
 | `geo-located.skp` | [`../2017/geo-located.skp`](../2017/geo-located.skp) | A manual geo-location: `UsesGeoReferencing`, `Latitude`, `Longitude` (§16.12). |
+| `arc.skp` | [`../2017/arc.skp`](../2017/arc.skp) | An open arc (radius 0.5 m) |
+| `attributes.skp` | [`../2017/attributes.skp`](../2017/attributes.skp) | A dynamic component |
+| `back-material.skp` | [`../2017/back-material.skp`](../2017/back-material.skp) | Different front and back paint on one face |
+| `blank-template-box.skp` | [`../2017/blank-template-box.skp`](../2017/blank-template-box.skp) | The cube in a truly blank template |
+| `box-component.skp` | [`../2017/box-component.skp`](../2017/box-component.skp) | One named component |
+| `box-component-two-instances.skp` | [`../2017/box-component-two-instances.skp`](../2017/box-component-two-instances.skp) | The same definition placed twice |
+| `box-group.skp` | [`../2017/box-group.skp`](../2017/box-group.skp) | Grouped geometry: a group is a component instance with an anonymous definition. |
+| `box-one-material.skp` | [`../2017/box-one-material.skp`](../2017/box-one-material.skp) | One painted cube face |
+| `box-two-materials.skp` | [`../2017/box-two-materials.skp`](../2017/box-two-materials.skp) | Two distinct solid materials |
+| `circle.skp` | [`../2017/circle.skp`](../2017/circle.skp) | A closed circle |
+| `component-move.skp` | [`../2017/component-move.skp`](../2017/component-move.skp) | An instance translated exactly 2 m |
+| `component-rotate.skp` | [`../2017/component-rotate.skp`](../2017/component-rotate.skp) | An instance rotated exactly 90° about Z |
+| `construction-point.skp` | [`../2017/construction-point.skp`](../2017/construction-point.skp) | A guide point at exactly (1 m, 2 m, 3 m) |
+| `curve.skp` | [`../2017/curve.skp`](../2017/curve.skp) | Freehand (`CCurve`) polylines |
+| `cylinder.skp` | [`../2017/cylinder.skp`](../2017/cylinder.skp) | A push/pulled circle |
+| `dimension.skp` | [`../2017/dimension.skp`](../2017/dimension.skp) | Two linear dimensions |
+| `empty.skp` | [`../2017/empty.skp`](../2017/empty.skp) | The default template with nothing drawn |
+| `empty-2.skp` | [`../2017/empty-2.skp`](../2017/empty-2.skp) | A second save of `empty.skp`: isolates save-to-save noise (doc id, re-rendered thumbnails) from stable payload. |
+| `face-with-hole.skp` | [`../2017/face-with-hole.skp`](../2017/face-with-hole.skp) | A face with an inner loop |
+| `group.skp` | [`../2017/group.skp`](../2017/group.skp) | Grouped geometry, as `box-group.skp`. |
+| `guide.skp` | [`../2017/guide.skp`](../2017/guide.skp) | An infinite construction line 1 m off axis |
+| `hidden-entities.skp` | [`../2017/hidden-entities.skp`](../2017/hidden-entities.skp) | Exactly one hidden edge and one hidden face vs `box.skp` |
+| `house.skp` | [`../2017/house.skp`](../2017/house.skp) | A complete multi-room house (46+ definitions, 58 groups, 9 materials incl. textures) |
+| `image.skp` | [`../2017/image.skp`](../2017/image.skp) | An imported raster image placed at 1 m width |
+| `instance-scaled.skp` | [`../2017/instance-scaled.skp`](../2017/instance-scaled.skp) | Non-uniform 2×1×1 scale plus a mirror |
+| `layers.skp` | [`../2017/layers.skp`](../2017/layers.skp) | Three user layers with per-layer boxes of authored sizes |
+| `long-name.skp` | [`../2017/long-name.skp`](../2017/long-name.skp) | A definition name longer than 255 characters |
+| `material-one-face.skp` | [`../2017/material-one-face.skp`](../2017/material-one-face.skp) | A bundled library texture (`[Wood Floor Light]`) on one face |
+| `mixed-definition.skp` | [`../2017/mixed-definition.skp`](../2017/mixed-definition.skp) | A definition holding both loose geometry and a nested instance |
+| `nested-3-deep.skp` | [`../2017/nested-3-deep.skp`](../2017/nested-3-deep.skp) | Three levels of nesting |
+| `nested-component.skp` | [`../2017/nested-component.skp`](../2017/nested-component.skp) | A component inside a component |
+| `ngon-face.skp` | [`../2017/ngon-face.skp`](../2017/ngon-face.skp) | A hexagonal face |
+| `paint-one-face.skp` | [`../2017/paint-one-face.skp`](../2017/paint-one-face.skp) | Pure red on one face of the box |
+| `pid-stress.skp` | [`../2017/pid-stress.skp`](../2017/pid-stress.skp) | 2,703 boxes (~70k entities) |
+| `pin-fixed-distort.skp` | [`../2017/pin-fixed-distort.skp`](../2017/pin-fixed-distort.skp) | Fixed-pin distortion |
+| `pin-four.skp` | [`../2017/pin-four.skp`](../2017/pin-four.skp) | All four pins dragged to authored midpoints |
+| `pin-identity.skp` | [`../2017/pin-identity.skp`](../2017/pin-identity.skp) | Free-pin mode entered and committed with no drag |
+| `pin-one.skp` | [`../2017/pin-one.skp`](../2017/pin-one.skp) | One pin dragged to the bottom-edge midpoint |
+| `png-texture.skp` | [`../2017/png-texture.skp`](../2017/png-texture.skp) | A PNG (alpha) texture |
+| `polyline.skp` | [`../2017/polyline.skp`](../2017/polyline.skp) | A drawn polyline |
+| `section-plane.skp` | [`../2017/section-plane.skp`](../2017/section-plane.skp) | An active section plane at exactly 0.5 m |
+| `single-line.skp` | [`../2017/single-line.skp`](../2017/single-line.skp) | One 1 m line from the origin along X |
+| `soft-smooth-edges.skp` | [`../2017/soft-smooth-edges.skp`](../2017/soft-smooth-edges.skp) | A cube with softened+smoothed edges |
+| `text.skp` | [`../2017/text.skp`](../2017/text.skp) | One leader text and one screen text |
+| `texture-offset.skp` | [`../2017/texture-offset.skp`](../2017/texture-offset.skp) | Texture offset by exactly 0.5 m |
+| `texture-rot45.skp` | [`../2017/texture-rot45.skp`](../2017/texture-rot45.skp) | Texture rotated exactly 45° |
+| `texture-rotated.skp` | [`../2017/texture-rotated.skp`](../2017/texture-rotated.skp) | Texture rotated 90° |
+| `texture-scale2x.skp` | [`../2017/texture-scale2x.skp`](../2017/texture-scale2x.skp) | A pure fixed-pin 2× scale |
+| `texture-scaled.skp` | [`../2017/texture-scaled.skp`](../2017/texture-scaled.skp) | Texture scaled via the position tool |
+| `triangle-face.skp` | [`../2017/triangle-face.skp`](../2017/triangle-face.skp) | Three edges closed into the first face: `CFace`, `CLoop`, `CEdgeUse`. |
+| `two-components.skp` | [`../2017/two-components.skp`](../2017/two-components.skp) | Two distinct definitions |
+| `two-lines.skp` | [`../2017/two-lines.skp`](../2017/two-lines.skp) | Two lines sharing an endpoint |
+| `two-scenes.skp` | [`../2017/two-scenes.skp`](../2017/two-scenes.skp) | Two saved scenes |
+| `uv-quad.skp` | [`../2017/uv-quad.skp`](../2017/uv-quad.skp) | A 1 m textured quad at default position |
 
 The third-party benchmark's conversion is
 [`../third-party/theater-2026.skp`](../third-party/theater-2026.skp).

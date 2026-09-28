@@ -1,7 +1,7 @@
-//! Typed document settings, shared by the 2017 and post-2017 readers:
+//! Typed document settings, shared by the 2017 and 2026 readers:
 //! camera, rendering options, shadows, units, styles, watermarks and
 //! scenes (SKP_FORMAT §10.6–§10.10 for the 2017 records, §16.9–§16.15
-//! for the post-2017 ones). Both readers fill the same structs, and
+//! for the 2026 ones). Both readers fill the same structs, and
 //! `tests/read26.rs` holds every converted corpus file to its original.
 
 use crate::INCH;
@@ -49,7 +49,7 @@ impl Camera {
     }
 }
 
-/// One rendering-option field: its post-2017 record tag, its 2017 offset in
+/// One rendering-option field: its 2026 record tag, its 2017 offset in
 /// the §10.7 block (`None` for fields the 2017 block lacks) and the style
 /// document item id that carries it (`None` for fields no style holds).
 #[derive(Debug, Clone, Copy)]
@@ -238,7 +238,7 @@ rendering_options! {
     model_axes: bool = Bool, 0x7343, Some(117), Some(7008);
     color_by_layer: bool = Bool, 0x7347, Some(29), Some(7011);
     hidden_geometry: bool = Bool, 0x7380, Some(56), Some(7017);
-    /// Post-2017 only; a 2017 file's single hidden-geometry setting fills
+    /// 2026 only; a 2017 file's single hidden-geometry setting fills
     /// both.
     hidden_objects: bool = Bool, 0x7381, Some(56), Some(7018);
     active_section_color: [u8; 4] = Rgba, 0x7370, Some(140), Some(7003);
@@ -247,9 +247,9 @@ rendering_options! {
     section_cut_width: u32 = U32, 0x7374, Some(152), Some(7014);
     /// Bit 1 section planes shown, bit 2 section cuts shown.
     section_display: u32 = U32, 0x7375, Some(156), Some(7013);
-    /// Post-2017 only.
+    /// 2026 only.
     section_fill: Option<bool> = Bool, 0x7376, None, Some(7015);
-    /// Post-2017 only.
+    /// 2026 only.
     section_fill_color: Option<[u8; 4]> = Rgba, 0x7373, None, Some(7016);
     fog: bool = Bool, 0x735f, Some(87), None;
     fog_color: [u8; 4] = Rgba, 0x7360, Some(88), None;
@@ -309,7 +309,7 @@ impl RenderingOptions {
         Some(ro)
     }
 
-    /// Store one post-2017 `0x733c` child record.
+    /// Store one 2026 `0x733c` child record.
     pub(crate) fn set_record(&mut self, tag: u16, b: &[u8]) {
         if let Some(f) = RO_FIELDS.iter().find(|f| f.tag == tag) {
             if let Some(v) = RoValue::decode(f.kind, b) {
@@ -378,9 +378,9 @@ pub struct Units {
     pub snap_angle: f64,
     pub suppress_units_display: bool,
     pub force_inch_display: bool,
-    /// Post-2017 only: 0 in², 1 ft², 2 mm², 3 cm², 4 m², 5 yd².
+    /// 2026 only: 0 in², 1 ft², 2 mm², 3 cm², 4 m², 5 yd².
     pub area_unit: Option<u32>,
-    /// Post-2017 only: 0 in³ … 5 yd³, 6 litres, 7 US gallons.
+    /// 2026 only: 0 in³ … 5 yd³, 6 litres, 7 US gallons.
     pub volume_unit: Option<u32>,
     pub area_precision: Option<u32>,
     pub volume_precision: Option<u32>,
@@ -485,7 +485,7 @@ impl SceneProperties {
     pub const HIDDEN_GEOMETRY: u32 = 16;
     pub const VISIBLE_LAYERS: u32 = 32;
     pub const ACTIVE_SECTION_PLANES: u32 = 64;
-    /// Post-2017: hidden geometry and hidden objects as separate bits.
+    /// 2026: hidden geometry and hidden objects as separate bits.
     pub const HIDDEN_GEOMETRY_2: u32 = 128;
     pub const HIDDEN_OBJECTS: u32 = 256;
     pub fn has(self, bit: u32) -> bool {

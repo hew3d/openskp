@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""skp26 — reverse-engineering reader for the post-2017 (.skp 2026) container.
+"""skp26 — reverse-engineering reader for the 2026 (.skp) container.
 
 Clean-room: derived only from observing SketchUp 2026 files (corpus/2026,
 corpus/third-party/theater-2026.skp) against their decoded 2017 originals.
@@ -40,7 +40,7 @@ def header_strings(d):
 def open_zip(d):
     i = d.find(b"PK\x03\x04")
     if i < 0:
-        raise ValueError("no ZIP archive: not a post-2017 container")
+        raise ValueError("no ZIP archive: not a 2026 container")
     return zipfile.ZipFile(io.BytesIO(d[i:]))
 
 # ---------------------------------------------------------------- records

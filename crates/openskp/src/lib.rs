@@ -1,8 +1,9 @@
-//! Clean-room reader for the SketchUp `.skp` format: the 2017 binary format
-//! (v17.3.116 and nearby) and the post-2017 ZIP container (SketchUp 2026).
-//! Derived solely from observed `.skp` files and their COLLADA exports — no
-//! Trimble SDK. See `docs/SKP_FORMAT.md` for the format
-//! and `docs/SDK.md` for how to use this crate.
+//! Clean-room reader for the SketchUp `.skp` format: the 2026 container
+//! that current SketchUp saves (`{26.x}`, a ZIP archive of tagged records)
+//! and the 2017 binary format (`{17.x}`, one MFC `CArchive` stream). Both
+//! yield the same [`Model`]. Derived solely from observed `.skp` files and
+//! their COLLADA exports — no Trimble SDK. See `docs/SKP_FORMAT.md` for the
+//! format and `docs/SDK.md` for how to use this crate.
 
 mod carchive;
 pub mod ctx;
@@ -32,7 +33,7 @@ pub use settings::{
 };
 
 /// Header-only identification: `(version, model_guid)` — works even when the
-/// container is unreadable past the fixed header (e.g. post-2017 files), so
+/// container is unreadable past the fixed header (e.g. 2026 files), so
 /// tooling can always say WHAT a file is before refusing it. The model GUID
 /// is a per-model identifier the 2013–2017 header carries (SKP_FORMAT §3);
 /// it is `None` for any other container, whose header has no such field.
@@ -57,7 +58,7 @@ pub struct Definition {
     pub timestamp: u32,
     /// The key instance def-refs carry: on the 2017 continuous path the
     /// definition object's GLOBAL archive map slot (SKP_FORMAT §4s); on the
-    /// post-2017 path the definition's entity-container persistent id
+    /// 2026 path the definition's entity-container persistent id
     /// (§16.5). `None` on the legacy byte-scan path (which links
     /// positionally through `Model::definition_links` instead).
     pub map_index: Option<usize>,
@@ -97,8 +98,9 @@ pub struct Instance {
     pub hidden: Option<bool>,
     /// §4q drawbase layer slot; `None` on the legacy byte-scan path.
     pub layer: Option<u16>,
-    /// The placing object's GLOBAL map slot (§4s); `None` on the legacy
-    /// byte-scan path.
+    /// The placing object's GLOBAL map slot (§4s) on the 2017 continuous
+    /// walk; `None` on the 2017 byte-scan fallback and on 2026 files,
+    /// which have no store map.
     pub slot: Option<usize>,
 }
 
@@ -156,6 +158,11 @@ pub struct SectionPlane {
 /// A construction line (guide): a point + unit direction, point in metres.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Guide {
+    /// The owning definition's `Definition::map_index`; `None` for a guide
+    /// among the model's own entities. Coordinates are in the owner's
+    /// local frame. `None` on the legacy byte-scan path, which only finds
+    /// guides by class name.
+    pub def_index: Option<usize>,
     pub point_m: [f64; 3],
     pub direction: [f64; 3],
 }
@@ -207,8 +214,9 @@ pub struct PlacedInstance {
     /// §4q drawbase layer slot (0 = default layer); an instance on a
     /// hidden layer is not displayed/exported.
     pub layer: u16,
-    /// The placing object's GLOBAL map slot (§4s); `None` on the legacy
-    /// byte-scan path.
+    /// The placing object's GLOBAL map slot (§4s) on the 2017 continuous
+    /// walk; `None` on the 2017 byte-scan fallback and on 2026 files,
+    /// which have no store map.
     pub slot: Option<usize>,
 }
 

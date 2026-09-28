@@ -16,8 +16,27 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 fn corpus(name: &str) -> Vec<u8> {
+    corpus_at("2017", name)
+}
+
+/// A 2017 corpus file and its SketchUp 2026 twin (`corpus/2026/<name>`,
+/// the web app's conversion of the same model; the same expectations
+/// apply).
+fn twin_dirs(name: &str) -> Vec<&'static str> {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("../../corpus/2017");
+    p.push("../../corpus/2026");
+    p.push(name);
+    if p.exists() {
+        vec!["2017", "2026"]
+    } else {
+        vec!["2017"]
+    }
+}
+
+fn corpus_at(dir: &str, name: &str) -> Vec<u8> {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("../../corpus");
+    p.push(dir);
     p.push(name);
     std::fs::read(p).unwrap()
 }
@@ -540,228 +559,254 @@ fn dae_world_mesh(d: &Dae, snap: &Snap) -> WorldMesh {
 
 #[test]
 fn house_world_mesh_matches_dae() {
-    let m = openskp::Model::parse(&corpus("house.skp")).unwrap();
-    assert!(
-        m.diagnostics
-            .iter()
-            .any(|d| matches!(d, openskp::Diagnostic::ContinuousWalk { .. })),
-        "house must parse on the continuous path"
-    );
-    let dae = parse_dae("house.dae");
-    let mut union = our_raw_verts(&m);
-    union.extend(dae_raw_verts(&dae));
-    let snap = Snap::of(&union);
-    let theirs = dae_world_mesh(&dae, &snap);
-    let ours = our_world_mesh(&m, &snap);
-    let only_ours: Vec<_> = ours.verts.difference(&theirs.verts).collect();
-    let only_dae: Vec<_> = theirs.verts.difference(&ours.verts).collect();
-    assert!(
-        only_ours.is_empty() && only_dae.is_empty(),
-        "world vertex sets differ: only-ours {only_ours:?} only-dae {only_dae:?}"
-    );
-    let ring_only_ours: Vec<_> = ours.rings.difference(&theirs.rings).collect();
-    let ring_only_dae: Vec<_> = theirs.rings.difference(&ours.rings).collect();
-    assert!(
-        ring_only_ours.is_empty() && ring_only_dae.is_empty(),
-        "world face-ring sets differ: only-ours {ring_only_ours:?} only-dae {ring_only_dae:?}"
-    );
-}
-
-#[test]
-fn house_materials_cover_dae_diffuse() {
-    let m = openskp::Model::parse(&corpus("house.skp")).unwrap();
-    let dae = parse_dae("house.dae");
-    let ours: BTreeSet<[u8; 3]> = m
-        .materials
-        .iter()
-        .filter_map(|mat| match mat {
-            openskp::Material::Solid { rgba, .. } => Some([rgba[0], rgba[1], rgba[2]]),
-            openskp::Material::Textured {
-                avg_rgba: Some(c), ..
-            } => Some([c[0], c[1], c[2]]),
-            _ => None,
-        })
-        .collect();
-    for c in &dae.diffuse {
+    for dir in twin_dirs("house.skp") {
+        let m = openskp::Model::parse(&corpus_at(dir, "house.skp")).unwrap();
+        // The continuous walk is the 2017 path; a 2026 file has no such diagnostic.
+        if dir == "2017" {
+            assert!(
+                m.diagnostics
+                    .iter()
+                    .any(|d| matches!(d, openskp::Diagnostic::ContinuousWalk { .. })),
+                "house must parse on the continuous path"
+            );
+        }
+        let dae = parse_dae("house.dae");
+        let mut union = our_raw_verts(&m);
+        union.extend(dae_raw_verts(&dae));
+        let snap = Snap::of(&union);
+        let theirs = dae_world_mesh(&dae, &snap);
+        let ours = our_world_mesh(&m, &snap);
+        let only_ours: Vec<_> = ours.verts.difference(&theirs.verts).collect();
+        let only_dae: Vec<_> = theirs.verts.difference(&ours.verts).collect();
         assert!(
-            ours.contains(&[c[0], c[1], c[2]]),
-            "dae diffuse {c:?} not among extracted materials {ours:?}"
+            only_ours.is_empty() && only_dae.is_empty(),
+            "world vertex sets differ: only-ours {only_ours:?} only-dae {only_dae:?}"
+        );
+        let ring_only_ours: Vec<_> = ours.rings.difference(&theirs.rings).collect();
+        let ring_only_dae: Vec<_> = theirs.rings.difference(&ours.rings).collect();
+        assert!(
+            ring_only_ours.is_empty() && ring_only_dae.is_empty(),
+            "world face-ring sets differ: only-ours {ring_only_ours:?} only-dae {ring_only_dae:?}"
         );
     }
 }
 
 #[test]
+fn house_materials_cover_dae_diffuse() {
+    for dir in twin_dirs("house.skp") {
+        let m = openskp::Model::parse(&corpus_at(dir, "house.skp")).unwrap();
+        let dae = parse_dae("house.dae");
+        let ours: BTreeSet<[u8; 3]> = m
+            .materials
+            .iter()
+            .filter_map(|mat| match mat {
+                openskp::Material::Solid { rgba, .. } => Some([rgba[0], rgba[1], rgba[2]]),
+                openskp::Material::Textured {
+                    avg_rgba: Some(c), ..
+                } => Some([c[0], c[1], c[2]]),
+                _ => None,
+            })
+            .collect();
+        for c in &dae.diffuse {
+            assert!(
+                ours.contains(&[c[0], c[1], c[2]]),
+                "dae diffuse {c:?} not among extracted materials {ours:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn house_scene_roots_match_dae_nodes() {
-    let m = openskp::Model::parse(&corpus("house.skp")).unwrap();
-    let dae = parse_dae("house.dae");
-    let scene = m.scene();
-    assert_eq!(scene.len(), dae.root_names.len(), "scene root count");
-    // named roots: the exporter replaces spaces with underscores and
-    // auto-names anonymous instances (instance_N) — compare the named ones.
-    let ours: BTreeSet<String> = m
-        .instances
-        .iter()
-        .filter_map(|i| i.name.clone())
-        .filter(|n| !n.is_empty())
-        .map(|n| n.replace(' ', "_"))
-        .collect();
-    for n in dae
-        .root_names
-        .iter()
-        .filter(|n| !n.starts_with("instance_"))
-    {
-        assert!(ours.contains(n.as_str()), "dae root {n:?} missing from skp");
+    for dir in twin_dirs("house.skp") {
+        let m = openskp::Model::parse(&corpus_at(dir, "house.skp")).unwrap();
+        let dae = parse_dae("house.dae");
+        let scene = m.scene();
+        assert_eq!(scene.len(), dae.root_names.len(), "scene root count");
+        // named roots: the exporter replaces spaces with underscores and
+        // auto-names anonymous instances (instance_N) — compare the named ones.
+        let ours: BTreeSet<String> = m
+            .instances
+            .iter()
+            .filter_map(|i| i.name.clone())
+            .filter(|n| !n.is_empty())
+            .map(|n| n.replace(' ', "_"))
+            .collect();
+        for n in dae
+            .root_names
+            .iter()
+            .filter(|n| !n.starts_with("instance_"))
+        {
+            assert!(ours.contains(n.as_str()), "dae root {n:?} missing from skp");
+        }
     }
 }
 
 #[test]
 fn house_uvs_match_dae_texcoords() {
-    let m = openskp::Model::parse(&corpus("house.skp")).unwrap();
-    let dae = parse_dae("house.dae");
+    for dir in twin_dirs("house.skp") {
+        let m = openskp::Model::parse(&corpus_at(dir, "house.skp")).unwrap();
+        let dae = parse_dae("house.dae");
 
-    let mut union = our_raw_verts(&m);
-    union.extend(dae_raw_verts(&dae));
-    let snap = Snap::of(&union);
+        let mut union = our_raw_verts(&m);
+        union.extend(dae_raw_verts(&dae));
+        let snap = Snap::of(&union);
 
-    // our faces, world-keyed: canon ring → (leaf world, run, face, inherited)
-    let mut ours: HashMap<Vec<[i64; 3]>, (M4, usize, usize, u16)> = HashMap::new();
-    for (world, ri, inherited) in our_leaves(&m) {
-        let mesh = &m.geometry[ri].mesh;
-        for (fi, f) in mesh.faces.iter().enumerate() {
-            let ring: Vec<[i64; 3]> = f
-                .outer
-                .iter()
-                .map(|&vi| snap.snap(q(apply(&world, mesh.vertices[vi as usize]))))
-                .collect();
-            ours.insert(canon_full(&ring), (world, ri, fi, inherited));
-        }
-    }
-
-    let mut checked = 0;
-    for (world, gid) in &dae.leaves {
-        let g = &dae.geoms[gid];
-        for (ring, ring_uv) in &g.textured {
-            let wring: Vec<([i64; 3], [f64; 2])> = ring
-                .iter()
-                .zip(ring_uv)
-                .map(|(&i, &uv)| {
-                    let p = g.pos[i];
-                    (
-                        snap.snap(q(apply(
-                            world,
-                            [p[0] * dae.unit, p[1] * dae.unit, p[2] * dae.unit],
-                        ))),
-                        uv,
-                    )
-                })
-                .collect();
-            let key = canon_full(&wring.iter().map(|(p, _)| *p).collect::<Vec<_>>());
-            let Some(&(oworld, ri, fi, inherited)) = ours.get(&key) else {
-                panic!("dae textured face has no skp match ({gid})");
-            };
+        // our faces, world-keyed: canon ring → (leaf world, run, face, inherited)
+        let mut ours: HashMap<Vec<[i64; 3]>, (M4, usize, usize, u16)> = HashMap::new();
+        for (world, ri, inherited) in our_leaves(&m) {
             let mesh = &m.geometry[ri].mesh;
-            let f = &mesh.faces[fi];
-            // world corner → our LOCAL corner (UVs are defined in def space)
-            let local_of: HashMap<[i64; 3], [f64; 3]> = f
-                .outer
-                .iter()
-                .map(|&vi| {
-                    let p = mesh.vertices[vi as usize];
-                    (snap.snap(q(apply(&oworld, p))), p)
-                })
-                .collect();
-            // pick the side whose predicted UVs fit best; require < tol.
-            // A default-material side renders the INHERITED instance
-            // material (§4q drawbase matref down the node path).
-            let mut best = f64::INFINITY;
-            for (mat, side) in [
-                (f.front_material, openskp::Side::Front),
-                (f.back_material, openskp::Side::Back),
-            ] {
-                let slot = mat.unwrap_or(inherited);
-                let Some(size) = (slot != 0)
-                    .then_some(slot)
-                    .and_then(|slot| m.applied_size_of(slot))
-                else {
-                    continue;
-                };
-                let x = f.uv_xform(side, size).unwrap();
-                let mut err = 0.0f64;
-                for (wp, uv) in &wring {
-                    let local = local_of[wp];
-                    let got = x.apply(local);
-                    err = err.max((got[0] - uv[0]).abs()).max((got[1] - uv[1]).abs());
-                }
-                best = best.min(err);
+            for (fi, f) in mesh.faces.iter().enumerate() {
+                let ring: Vec<[i64; 3]> = f
+                    .outer
+                    .iter()
+                    .map(|&vi| snap.snap(q(apply(&world, mesh.vertices[vi as usize]))))
+                    .collect();
+                ours.insert(canon_full(&ring), (world, ri, fi, inherited));
             }
-            assert!(
-                best < 1e-4,
-                "textured face pid {} ({gid}): best side uv err {best}",
-                f.pid
-            );
-            checked += 1;
         }
+
+        let mut checked = 0;
+        for (world, gid) in &dae.leaves {
+            let g = &dae.geoms[gid];
+            for (ring, ring_uv) in &g.textured {
+                let wring: Vec<([i64; 3], [f64; 2])> = ring
+                    .iter()
+                    .zip(ring_uv)
+                    .map(|(&i, &uv)| {
+                        let p = g.pos[i];
+                        (
+                            snap.snap(q(apply(
+                                world,
+                                [p[0] * dae.unit, p[1] * dae.unit, p[2] * dae.unit],
+                            ))),
+                            uv,
+                        )
+                    })
+                    .collect();
+                let key = canon_full(&wring.iter().map(|(p, _)| *p).collect::<Vec<_>>());
+                let Some(&(oworld, ri, fi, inherited)) = ours.get(&key) else {
+                    panic!("dae textured face has no skp match ({gid})");
+                };
+                let mesh = &m.geometry[ri].mesh;
+                let f = &mesh.faces[fi];
+                // world corner → our LOCAL corner (UVs are defined in def space)
+                let local_of: HashMap<[i64; 3], [f64; 3]> = f
+                    .outer
+                    .iter()
+                    .map(|&vi| {
+                        let p = mesh.vertices[vi as usize];
+                        (snap.snap(q(apply(&oworld, p))), p)
+                    })
+                    .collect();
+                // pick the side whose predicted UVs fit best; require < tol.
+                // A default-material side renders the INHERITED instance
+                // material (§4q drawbase matref down the node path).
+                let mut best = f64::INFINITY;
+                for (mat, side) in [
+                    (f.front_material, openskp::Side::Front),
+                    (f.back_material, openskp::Side::Back),
+                ] {
+                    let slot = mat.unwrap_or(inherited);
+                    let Some(size) = (slot != 0)
+                        .then_some(slot)
+                        .and_then(|slot| m.applied_size_of(slot))
+                    else {
+                        continue;
+                    };
+                    let x = f.uv_xform(side, size).unwrap();
+                    let mut err = 0.0f64;
+                    for (wp, uv) in &wring {
+                        let local = local_of[wp];
+                        let got = x.apply(local);
+                        err = err.max((got[0] - uv[0]).abs()).max((got[1] - uv[1]).abs());
+                    }
+                    best = best.min(err);
+                }
+                assert!(
+                    best < 1e-4,
+                    "textured face pid {} ({gid}): best side uv err {best}",
+                    f.pid
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 68, "house.dae carries 68 textured polylist faces");
     }
-    assert_eq!(checked, 68, "house.dae carries 68 textured polylist faces");
 }
 
 // ---- 6.2: THE goal test ----
 
 #[test]
 fn house_plus_geometry_equals_house() {
-    let plus = openskp::Model::parse(&corpus("house-plus.skp")).unwrap();
-    let base = openskp::Model::parse(&corpus("house.skp")).unwrap();
-    for (m, name) in [(&plus, "house-plus"), (&base, "house")] {
-        assert!(
-            m.diagnostics
-                .iter()
-                .any(|d| matches!(d, openskp::Diagnostic::ContinuousWalk { .. })),
-            "{name} must parse on the continuous path"
+    for dir in twin_dirs("house.skp") {
+        let plus = openskp::Model::parse(&corpus_at(dir, "house-plus.skp")).unwrap();
+        let base = openskp::Model::parse(&corpus_at(dir, "house.skp")).unwrap();
+        for (m, name) in [(&plus, "house-plus"), (&base, "house")] {
+            // The continuous walk is the 2017 path; a 2026 file has no such diagnostic.
+            if dir == "2017" {
+                assert!(
+                    m.diagnostics
+                        .iter()
+                        .any(|d| matches!(d, openskp::Diagnostic::ContinuousWalk { .. })),
+                    "{name} must parse on the continuous path"
+                );
+            }
+        }
+
+        // Verbatim: the DRAWING is unchanged — identical world-space geometry.
+        let mut union = our_raw_verts(&base);
+        union.extend(our_raw_verts(&plus));
+        let snap = Snap::of(&union);
+        let b = our_world_mesh(&base, &snap);
+        let a = our_world_mesh(&plus, &snap);
+        assert_eq!(
+            a.verts,
+            b.verts,
+            "house-plus world vertices differ from house ({} vs {})",
+            a.verts.len(),
+            b.verts.len()
         );
+        assert_eq!(
+            a.rings,
+            b.rings,
+            "house-plus world face rings differ from house ({} vs {})",
+            a.rings.len(),
+            b.rings.len()
+        );
+
+        // The extras are all VISIBLE, and only as non-geometry surfaces.
+        let count = |m: &openskp::Model, f: fn(&openskp::Topology) -> usize| -> usize {
+            m.geometry.iter().map(|r| f(&r.topology)).sum()
+        };
+        assert_eq!(count(&base, |t| t.dimensions), 0);
+        assert_eq!(count(&base, |t| t.texts), 0);
+        assert_eq!(count(&base, |t| t.images_placed), 0);
+        assert_eq!(count(&plus, |t| t.dimensions), 2, "the two dimensions");
+        assert_eq!(count(&plus, |t| t.texts), 1, "the leader text");
+        assert_eq!(count(&plus, |t| t.images_placed), 1, "the imported image");
+        assert_eq!(base.scenes.len(), 0);
+        assert_eq!(plus.scenes.len(), 2, "the two authored scenes");
+        assert_eq!(base.materials.len(), 9, "house materials (§4s addendum 2)");
+        assert_eq!(
+            plus.materials.len(),
+            11,
+            "house-plus adds the dimension auto-material and the image material"
+        );
+        // `images` lists every embedded image; on a 2026 file that includes
+        // the archive's thumbnails (one per definition and scene), so only
+        // the 2017 count is a fixed +1.
+        if dir == "2017" {
+            assert_eq!(
+                plus.images.len(),
+                base.images.len() + 1,
+                "the imported picture's CDib"
+            );
+        } else {
+            assert!(
+                plus.images.len() > base.images.len(),
+                "the imported picture's image"
+            );
+        }
     }
-
-    // Verbatim: the DRAWING is unchanged — identical world-space geometry.
-    let mut union = our_raw_verts(&base);
-    union.extend(our_raw_verts(&plus));
-    let snap = Snap::of(&union);
-    let b = our_world_mesh(&base, &snap);
-    let a = our_world_mesh(&plus, &snap);
-    assert_eq!(
-        a.verts,
-        b.verts,
-        "house-plus world vertices differ from house ({} vs {})",
-        a.verts.len(),
-        b.verts.len()
-    );
-    assert_eq!(
-        a.rings,
-        b.rings,
-        "house-plus world face rings differ from house ({} vs {})",
-        a.rings.len(),
-        b.rings.len()
-    );
-
-    // The extras are all VISIBLE, and only as non-geometry surfaces.
-    let count = |m: &openskp::Model, f: fn(&openskp::Topology) -> usize| -> usize {
-        m.geometry.iter().map(|r| f(&r.topology)).sum()
-    };
-    assert_eq!(count(&base, |t| t.dimensions), 0);
-    assert_eq!(count(&base, |t| t.texts), 0);
-    assert_eq!(count(&base, |t| t.images_placed), 0);
-    assert_eq!(count(&plus, |t| t.dimensions), 2, "the two dimensions");
-    assert_eq!(count(&plus, |t| t.texts), 1, "the leader text");
-    assert_eq!(count(&plus, |t| t.images_placed), 1, "the imported image");
-    assert_eq!(base.scenes.len(), 0);
-    assert_eq!(plus.scenes.len(), 2, "the two authored scenes");
-    assert_eq!(base.materials.len(), 9, "house materials (§4s addendum 2)");
-    assert_eq!(
-        plus.materials.len(),
-        11,
-        "house-plus adds the dimension auto-material and the image material"
-    );
-    assert_eq!(
-        plus.images.len(),
-        base.images.len() + 1,
-        "the imported picture's CDib"
-    );
 }

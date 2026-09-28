@@ -2,9 +2,11 @@
 
 ## What this project is
 
-A **clean-room** specification and reader for the SketchUp `.skp` format —
-the 2017 binary format (v17.3.116 and nearby) and the post-2017 ZIP
-container (SketchUp 2026) — for which no public spec exists.
+A **clean-room** specification and reader for the SketchUp `.skp` format,
+for which no public spec exists. The primary target is the 2026 container
+that every current SketchUp release saves (`{26.x}`, spec §16); the 2017
+binary format (`{17.x}`, spec §2–§13) stays fully supported because many
+existing models are in it. Both readers must produce the same `Model`.
 Deliverables: the format spec (`docs/SKP_FORMAT.md` + `ksy/skp.ksy`), the
 Rust SDK (`crates/openskp` + CLI + C ABI), and the evidence corpus.
 
@@ -30,8 +32,9 @@ Rust SDK (`crates/openskp` + CLI + C ABI), and the evidence corpus.
 ## Layout
 
 ```
+corpus/2026/         the 2026 corpus: 2017 corpus models saved by SketchUp 2026 (README lists purposes)
 corpus/2017/         authored minimal pairs + .dae ground truth (README lists purposes)
-corpus/legacy|2026|third-party/     older saves, 2026 saves of 2017 models, the benchmark model
+corpus/legacy|third-party/   2013–2016 saves; the benchmark model in both containers
 docs/                SKP_FORMAT.md (the spec — read first), SDK.md, DEVELOPMENT.md
 ksy/                 skp.ksy — Kaitai grammar (header + record catalogue)
 crates/              openskp (core), openskp-cli, openskp-capi
@@ -55,7 +58,7 @@ scripts/verify.sh    Kaitai + reference-parser verification
   instance-painted materials inherit down the scene (spec §9).
 - Source comments cite `§4x` anchors (resolve via SKP_FORMAT.md
   Appendix B) and `Phase N` labels (resolve via DEVELOPMENT.md).
-- Post-2017 (spec §16): header string records, then a ZIP whose
+- 2026 (spec §16): header string records, then a ZIP whose
   `model.dat` is a tree of `u16 tag | u32 len | payload` records. Tags
   are type-scoped constants (unlike 2017 class tags); descend only into
   known containers (leaf payloads can tile as records). Persistent ids
@@ -92,8 +95,8 @@ Every 2017-era corpus file parses zero-desync on the continuous path;
 space; the third-party benchmark matches its export exactly (vertices,
 face rings, materials, all textured faces' UVs); the spec's class
 catalogue is machine-checked against `CVersionMap`. The legacy path
-serves v2013–16 only. Every `corpus/2026` file (and theater-2026) reads
-equivalent to its 2017 original (geometry, scene, materials, layers,
+serves v2013–16 only. Every 2017 corpus file has a 2026 twin, and every
+twin (and theater-2026) reads equivalent to its 2017 original (geometry, scene, materials, layers,
 UVs, scenes, guides, document settings; `images`/`attributes` differ by
 design), and
 theater-2026 meets the theater

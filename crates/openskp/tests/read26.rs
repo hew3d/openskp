@@ -20,15 +20,28 @@ fn model(rel: &str) -> Model {
     Model::read(&p).unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
 
-const PAIRS: &[(&str, &str)] = &[
-    ("2017/box.skp", "2026/box.skp"),
-    ("2017/feature-pack.skp", "2026/feature-pack.skp"),
-    ("2017/house-plus.skp", "2026/house-plus.skp"),
-    (
-        "third-party/theater-2017.skp",
-        "third-party/theater-2026.skp",
-    ),
-];
+/// Every 2026 corpus file next to its 2017 original, plus the third-party
+/// benchmark pair.
+fn pairs() -> Vec<(String, String)> {
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    dir.push("../../corpus");
+    let mut names: Vec<String> = std::fs::read_dir(dir.join("2026"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".skp") && dir.join("2017").join(n).exists())
+        .collect();
+    names.sort();
+    let mut out: Vec<(String, String)> = names
+        .into_iter()
+        .map(|n| (format!("2017/{n}"), format!("2026/{n}")))
+        .collect();
+    out.push((
+        "third-party/theater-2017.skp".into(),
+        "third-party/theater-2026.skp".into(),
+    ));
+    out
+}
 
 type P = [i64; 3];
 
@@ -108,11 +121,18 @@ fn run_sig(r: &openskp::GeometryRun) -> RunSig {
 
 #[test]
 fn every_2026_file_reads_equivalent_to_its_2017_original() {
-    for &(old, new) in PAIRS {
+    for (old, new) in pairs() {
+        let (old, new) = (old.as_str(), new.as_str());
         let a = model(old);
         let b = model(new);
         assert_eq!(b.version, "{26.2.0}", "{new}");
-        assert_eq!(b.model_guid, None, "{new}");
+        // The conversion writes a fresh model GUID into meta/meta.dat.
+        let guid = b.model_guid.as_deref().expect("2026 model GUID");
+        assert!(
+            guid.len() == 32 && guid.chars().all(|c| c.is_ascii_hexdigit()),
+            "{new}"
+        );
+        assert_ne!(b.model_guid, a.model_guid, "{new}");
         assert_eq!(b.diagnostics, Vec::new(), "{new}");
 
         // 1. Every definition's (and the root's) geometry, by content.
@@ -286,7 +306,8 @@ fn every_2026_file_reads_equivalent_to_its_2017_original() {
 /// byte for byte (the conversion stores them as ordinary archive files).
 #[test]
 fn texture_images_are_byte_identical() {
-    for &(old, new) in PAIRS {
+    for (old, new) in pairs() {
+        let (old, new) = (old.as_str(), new.as_str());
         let (a, b) = (model(old), model(new));
         let imgs = |m: &Model| -> BTreeMap<String, Vec<u8>> {
             m.materials
@@ -332,39 +353,6 @@ fn feature_pack_annotations() {
     assert_eq!(m.guides.len(), 1);
     assert_eq!(m.guides[0].direction, [1.0, 0.0, 0.0]);
 }
-
-/// The corpus pairs plus the scene files, whose 2026 files are conversions
-/// of the same 2017 saves.
-const SETTINGS_PAIRS: &[(&str, &str)] = &[
-    ("2017/box.skp", "2026/box.skp"),
-    ("2017/feature-pack.skp", "2026/feature-pack.skp"),
-    ("2017/house-plus.skp", "2026/house-plus.skp"),
-    (
-        "third-party/theater-2017.skp",
-        "third-party/theater-2026.skp",
-    ),
-    ("2017/scene-properties.skp", "2026/scene-properties.skp"),
-    ("2017/scene-no-camera.skp", "2026/scene-no-camera.skp"),
-    ("2017/units-engineering.skp", "2026/units-engineering.skp"),
-    ("2017/dimension-defaults.skp", "2026/dimension-defaults.skp"),
-    ("2017/text-defaults.skp", "2026/text-defaults.skp"),
-    ("2017/render-aa-off.skp", "2026/render-aa-off.skp"),
-    ("2017/component-fade.skp", "2026/component-fade.skp"),
-    ("2017/animation.skp", "2026/animation.skp"),
-    ("2017/geo-located.skp", "2026/geo-located.skp"),
-    ("2017/text-screen-color.skp", "2026/text-screen-color.skp"),
-    ("2017/text-arrow-none.skp", "2026/text-arrow-none.skp"),
-    ("2017/dimension-color.skp", "2026/dimension-color.skp"),
-    (
-        "2017/dimension-arrow-none.skp",
-        "2026/dimension-arrow-none.skp",
-    ),
-    (
-        "2017/component-fade-similar.skp",
-        "2026/component-fade-similar.skp",
-    ),
-    ("2017/component-axes.skp", "2026/component-axes.skp"),
-];
 
 fn font_of(m: &Model, i: Option<usize>) -> Option<openskp::Font> {
     i.map(|i| m.fonts[i].clone())
@@ -432,7 +420,8 @@ fn own_watermarks(w: &[openskp::Watermark]) -> Vec<openskp::Watermark> {
 
 #[test]
 fn every_2026_file_reads_the_same_settings_as_its_2017_original() {
-    for &(old, new) in SETTINGS_PAIRS {
+    for (old, new) in pairs() {
+        let (old, new) = (old.as_str(), new.as_str());
         let a = model(old);
         let b = model(new);
         assert_eq!(a.container, openskp::Container::Carchive2017, "{old}");
@@ -465,12 +454,16 @@ fn every_2026_file_reads_the_same_settings_as_its_2017_original() {
         if ua.length_format == 2 {
             ua.length_format = 0;
             ua.length_unit = 1;
-            assert!(
-                close(ua.length_snap_length, ub.length_snap_length, 1e-12),
-                "{new}: snap length"
-            );
-            ub.length_snap_length = ua.length_snap_length;
         }
+        // The conversion recomputes the snap length in the display unit
+        // (0.003937 m stored by 2017 versus 1/254 exactly).
+        assert!(
+            close(ua.length_snap_length, ub.length_snap_length, 1e-6),
+            "{new}: snap length {} vs {}",
+            ua.length_snap_length,
+            ub.length_snap_length
+        );
+        ub.length_snap_length = ua.length_snap_length;
         assert_eq!(ua, ub, "{new}: units");
 
         // Document tail (§10.11): axes, annotation defaults, and the

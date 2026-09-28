@@ -130,5 +130,33 @@ fn every_external_2026_conversion_reads_equivalent_to_its_2017_original() {
             v
         };
         assert_eq!(planes(&a), planes(&b), "{what}: section planes");
+
+        // Guides name their owning definition on both paths; compare them
+        // by (owner name, direction), since owners are identified by
+        // path-specific indices.
+        let guides = |m: &Model| -> Vec<(Option<String>, [i64; 3])> {
+            let owner = |i: Option<usize>| {
+                i.map(|i| {
+                    m.definitions
+                        .iter()
+                        .find(|d| d.map_index == Some(i))
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| format!("unresolved owner {i}"))
+                })
+            };
+            let mut v: Vec<_> = m
+                .guides
+                .iter()
+                .map(|g| {
+                    (
+                        owner(g.def_index),
+                        g.direction.map(|x| (x * 1e4).round() as i64),
+                    )
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(guides(&a), guides(&b), "{what}: guides");
     }
 }

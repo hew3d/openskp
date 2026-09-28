@@ -1,12 +1,19 @@
-# The SketchUp `.skp` File Format (2017 and 2026)
+# The SketchUp `.skp` File Format (2026 and 2017)
 
-This document specifies the SketchUp 2017 (v17.3.116) `.skp` binary format
-and, in §16, the post-2017 container (SketchUp 2026), as established by
-clean-room reverse engineering: every statement derives from observing
-`.skp` files, their COLLADA exports, or public knowledge of Microsoft MFC
-`CArchive` serialization and the ZIP format — never from the Trimble SDK. Facts
-that rest on a single observed instance are marked **candidate**; unknown
-regions are listed in [Known unknowns](#15-known-unknowns).
+This document specifies the two containers a SketchUp `.skp` file uses:
+the 2026 container that every current SketchUp release writes (a ZIP
+archive holding a self-describing record tree, §16) and the 2017 binary
+format (one MFC `CArchive` stream, §2–§13), as established by clean-room
+reverse engineering. Every statement derives from observing `.skp` files,
+their COLLADA exports, or public knowledge of Microsoft MFC `CArchive`
+serialization and the ZIP format — never from the Trimble SDK. Facts that
+rest on a single observed instance are marked **candidate**; unknown
+regions are listed in §15 (2017) and §16.16 (2026).
+
+To read files current SketchUp saves, start at §16; it is self-contained
+apart from the entity semantics it shares with the 2017 sections (§5–§10),
+which it cites. Section numbers are stable citation anchors and are not
+reordered.
 
 Together with the Kaitai Struct grammar [`ksy/skp.ksy`](../ksy/skp.ksy)
 (the deterministic header and the formal record-type catalogue), this
@@ -33,8 +40,9 @@ in [Appendix B](#appendix-b-anchor-index).
 ## 2. Container and header
 
 A 2017 `.skp` file is a fixed header followed by **one uncompressed MFC
-`CArchive` object stream**. It is not CFBF/OLE2 and not ZIP (post-2017
-releases changed this; see §16).
+`CArchive` object stream**; it is not CFBF/OLE2 and not ZIP. Files saved
+by SketchUp 2026 keep the header's string records and replace the stream
+with a ZIP archive (§16).
 
 Layout (offsets from `empty.skp`; all 2017 files match):
 
@@ -322,7 +330,7 @@ tail:
   u32           [0x1582]: 0 or 1 in the converted models, where it
                 equals 0x1582; 0x301 was also observed
   24 bytes      zero, except an f32 at +9 in 41 of 892 definitions
-                (no post-2017 counterpart found; undecoded)
+                (no 2026 counterpart found; undecoded)
   u8            glues to a surface          [0x1b5b]
   u8            cuts an opening             [0x1b5c]
   u32           glue plane                  [0x1b59]
@@ -341,9 +349,9 @@ definition tail and always follows the head pointer — an earlier reading
 placed it inside the relationship record and made the definition's own
 block "optional", which was this layout read out of phase.
 
-The component behaviour (brackets: the post-2017 record, §16.5) is
+The component behaviour (brackets: the 2026 record, §16.5) is
 pinned by SketchUp Make 2017 pairs editing the stock figure's
-behaviour (Components ▸ Edit), and decodes to the post-2017 values for
+behaviour (Components ▸ Edit), and decodes to the 2026 values for
 all 191 component definitions of the corpus models.
 
 An instance whose definition has not yet been serialized **inlines the
@@ -386,7 +394,7 @@ non-null attribute pointer carries renderer-plugin dictionaries, e.g.
 V-Ray's "VRayInfo"/"VRayPlugins"; pids are stored on some files). The
 body after the preamble:
 
-Brackets give the post-2017 `material.xml` attribute (§16.6) with the
+Brackets give the 2026 `material.xml` attribute (§16.6) with the
 same value in the conversions of `theater`, `feature-pack`,
 `house-plus` and `box` (103 materials).
 
@@ -426,7 +434,7 @@ u8                         (0 observed)
                            sharing a texture (house.skp: "[Wood Floor
                            Light]1" refs 23, the slot after "[Wood Floor
                            Light]" at 22) [§4s]
-(JPEG payloads only) u32   JPEG quality (the post-2017 `0x32cd`, §16.6)
+(JPEG payloads only) u32   JPEG quality (the 2026 `0x32cd`, §16.6)
 f64 × 2                    applied texture size: width, height in inches
                            [texture xScale, yScale]
 utf16                      texture filename        [textureFilename]
@@ -488,7 +496,7 @@ u32     0 in every observed layer                      [0x3c90] (candidate)
 ```
 
 After the internal name comes the solid-material body of the layer's
-colour (§8.1). The brackets name the post-2017 layer record and its
+colour (§8.1). The brackets name the 2026 layer record and its
 embedded material document (§16.6). The layers of `theater`,
 `feature-pack`, `house-plus` and `box` (99, 40 of them hidden) decode
 to their conversions field for field (891 checks).
@@ -583,7 +591,7 @@ FTC.
 
 ### 10.1 CDimensionLinear (schema 6) + CSkFont (schema 1) [§4k]
 
-Brackets give the post-2017 field (§16.13) with the same value in the
+Brackets give the 2026 field (§16.13) with the same value in the
 conversions of `feature-pack` and `house-plus` (three dimensions):
 
 ```
@@ -704,7 +712,7 @@ and dynamic-component parameters.
 (the preview image); the document's first CThumbnail is the preview and
 its camera is the **saved view** (it matches the COLLADA export's
 "Last_Saved_SketchUp_View" camera). **CCamera** (schema 5): no preamble — 137 raw bytes,
-u16 (1), utf16 description, 33-byte tail. Each field is the post-2017
+u16 (1), utf16 description, 33-byte tail. Each field is the 2026
 camera record in brackets (§16.9):
 
 ```
@@ -721,7 +729,7 @@ body +0    3 f64   eye            [0x34bd]      tail +0   f64  [0x34c9]
 
 SketchUp Make 2017 pairs switching to parallel projection and to
 two-point perspective pin `+88`, `+97` and tail `+8`; the document
-camera of every corpus model decodes to its post-2017 conversion's
+camera of every corpus model decodes to its 2026 conversion's
 values field for field. Scene records (`CViewPage`) are in §10.10.
 **CRelationship** (schema 0): see §7.1 — a chain node in definition
 tails [§4t].
@@ -732,7 +740,7 @@ The document's display settings (the `CRenderingOptions` object,
 **candidate** attribution) follow its current-view CCamera (§10.6):
 after the camera's 33-byte tail come 3 bytes (`00 00 00` in every
 observed file) and then fixed fields at these offsets from that point
-(+0). Each field is the post-2017 rendering-option record in brackets
+(+0). Each field is the 2026 rendering-option record in brackets
 (§16.10), which gives its meaning:
 
 | offset | type | field | offset | type | field |
@@ -772,7 +780,7 @@ observed file) and then fixed fields at these offsets from that point
 Evidence: each position was found by a one-change pair saved in
 SketchUp Make 2017 (Styles, Fog, View ▸ Component Edit, Model Info ▸
 Components), and all 64 fields decode to the same values as the
-post-2017 records in the web app's conversion of every such pair (54
+2026 records in the web app's conversion of every such pair (54
 one-change pairs) and of `box`, `feature-pack`, `house-plus` and
 `theater`. The section-fill settings
 (`0x7373`, `0x7376`) have no 2017 counterpart.
@@ -780,7 +788,7 @@ one-change pairs) and of `box`, `feature-pack`, `house-plus` and
 ### 10.8 Styles and watermarks
 
 A **CSkpStyle** (schema 1) body is a keyed item list, the 2017 form of
-the post-2017 style document (§16.14):
+the 2026 style document (§16.14):
 
 ```
 3 bytes          00 00 00 in every observed file
@@ -794,15 +802,15 @@ N × item         u32 item id | u32 value count | value × count
 value            u32 type | payload: 1 → u8, 4 → u32, 7 → f64
 ```
 
-Item ids and value types are the post-2017 `<sty:item id>` and
+Item ids and value types are the 2026 `<sty:item id>` and
 `<t:variant type>` of the same setting; colours are RGBA bytes. The
-post-2017 document adds items 1016, 4007, 7015–7018 and 8100–8107.
+2026 document adds items 1016, 4007, 7015–7018 and 8100–8107.
 Item 5001 (the watermark list) holds object references instead of typed
 values: each non-null reference is a CWatermark, and a single null
 reference marks the model. The entries before it are background
 watermarks and the entries after it are overlays. The value count
 includes the null, and it is 0 when the style has no watermarks. The
-post-2017 list (`<wmlist>`, type 13) keeps the same order and writes
+2026 list (`<wmlist>`, type 13) keeps the same order and writes
 the null as `<screenimage name="<MODEL SPACE>"/>`.
 
 The style manager stores, in order:
@@ -810,7 +818,7 @@ The style manager stores, in order:
 - a u32 style count and that many CSkpStyle records;
 - a reference to the active style;
 - a CSkpStyle holding the current settings. Its GUID and name are the
-  active style's, and it becomes the post-2017 `0x697b` (`<name>_1`);
+  active style's, and it becomes the 2026 `0x697b` (`<name>_1`);
 - a u32 that is 1 while the current settings differ from the saved
   active style (an edit or an added watermark) and 0 once the style is
   updated.
@@ -819,7 +827,7 @@ A style that a scene (`CViewPage`) references first appears inline in
 that scene record (`feature-pack`, `house-plus`), and the manager list
 refers back to it.
 
-A **CWatermark** (schema 1) body; brackets give the post-2017
+A **CWatermark** (schema 1) body; brackets give the 2026
 `<screenimage>` attribute and `0x2ee0` record (§16.14):
 
 ```
@@ -839,7 +847,7 @@ CDib             the image (§8.2); watermarks of the same image share one objec
 ```
 
 Tiled and stretched both 0 means positioned. The conversion derives
-the post-2017 fitting type (`0x2eee`: 0 tiled, 1 stretched,
+the 2026 fitting type (`0x2eee`: 0 tiled, 1 stretched,
 2 positioned) and stretch type (`0x2eef`: 1 = stretched with its aspect
 ratio kept), and it clears keep-aspect-ratio outside stretched mode,
 where the wizard hides the control.
@@ -852,7 +860,7 @@ holds an overlay and a background. The style-creation and style-update
 pairs pin the manager's layout. The web app converted 85 SketchUp Make
 2017 pairs (every pair behind §10.7–§10.10) plus `box`,
 `feature-pack`, `house-plus` and `theater`. In every conversion, the
-current-settings record and the active style decode to both post-2017
+current-settings record and the active style decode to both 2026
 style documents value for value (8,188 values plus each watermark
 list), because the conversion copies the current settings into the
 saved style. The watermark fields equal the converted
@@ -862,7 +870,7 @@ saved style. The watermark fields equal the converted
 ### 10.9 Shadow info
 
 The document's shadow settings, and those of each scene that saves
-them (§10.10), are one fixed record. Brackets give the post-2017 shadow
+them (§10.10), are one fixed record. Brackets give the 2026 shadow
 info field (§16.11):
 
 ```
@@ -893,7 +901,7 @@ Evidence: SketchUp Make 2017 pairs from the Shadows panel (date, time,
 light, dark, use sun for shading, and with shadows displayed: on faces,
 on the ground, from edges) and View ▸ Shadows. Across the web app's
 conversion of every 2017 pair and of `box`, `feature-pack`,
-`house-plus` and `theater` (89 files), each field equals its post-2017
+`house-plus` and `theater` (89 files), each field equals its 2026
 counterpart (1,424 values). The `[0x659a]` and `[0x6592]` pairings
 follow field order and are **candidates**; both are 0 everywhere.
 
@@ -929,13 +937,13 @@ The axes are a drawing element: a preamble with a null attribute
 pointer and pid mask 0, then a drawbase (§5.2). Next come the origin and
 the x, y and z axis directions (4 × 3 f64, `0x4651`–`0x4654`), and a u8
 that is 1 in every file. Bits 128 and above add no fields. The three
-lists match the post-2017 id lists in length. The bit-16 list holds the
+lists match the 2026 id lists in length. The bit-16 list holds the
 hidden entities (**candidate**), the bit-32 list the hidden layers
 (references to CLayer objects: 1, 3, 3 and 4 in a third-party bathroom
 model's four scenes, matching its conversion's `0x7150` lists), and the
 bit-64 list the active section planes. The scenes added through the Scenes
 panel in these pairs save bits 1–64 only and store no thumbnail. The
-post-2017 scene record omits the same fields when their property is not
+2026 scene record omits the same fields when their property is not
 saved.
 
 Evidence: SketchUp Make 2017 pairs from the Scenes panel. Each clears
@@ -993,7 +1001,7 @@ Evidence: SketchUp Make 2017 pairs from Model Info's Dimensions (align
 to the line, colour, both endpoints, text above and centred), Text (both
 endpoints, both colours), Rendering, Components, Animation and
 Geo-location pages, each converted by the web app; every decoded value
-equals its post-2017 record. The text endpoint "Closed Arrow" is the
+equals its 2026 record. The text endpoint "Closed Arrow" is the
 default (arrow 3), so that pair changes nothing.
 
 ## 11. Scale escalations [§4t]
@@ -1032,11 +1040,12 @@ guarantees it.
 - **2013–2016**: same outer container (header records, GUID, CArchive
   stream); different class schemas and body layouts. Header
   identification works; body decoding per this spec does not apply.
-- **2017 (v17.x)**: this specification.
-- **Post-2017**: in SketchUp 2026 saves (`{26.2.0}`, `corpus/2026/`) the
-  container is a ZIP archive after the leading string records, holding a
-  self-describing record tree; §16 specifies it. Releases 2018–2025 are
-  unobserved.
+- **2017 (v17.x)**: §2–§13 and §15.
+- **2026 (`{26.x}`)**: the container every current release writes — a
+  ZIP archive after the leading string records, holding a self-describing
+  record tree; §16 specifies it (`corpus/2026/`). Releases 2018–2025 are
+  unobserved; a file whose string records are followed by a ZIP archive
+  is read as §16.
 
 ## 15. Known unknowns
 
@@ -1087,17 +1096,18 @@ validated on exact ±Z normals; behavior within ~1e-9 of ±Z is untested.
 Instance-material inheritance beyond observed child-wins cases is
 unproven.
 
-## 16. The post-2017 container (SketchUp 2026)
+## 16. The SketchUp 2026 container
 
-Evidence: `corpus/2026/{box,feature-pack,house-plus}.skp` and
+Evidence: the files of `corpus/2026/` and
 `corpus/third-party/theater-2026.skp`, each the SketchUp web app's
-conversion of the same-named 2017 file (`{26.2.0}`). Persistent ids
-survive the conversion (renumbered only where the 2017 file held
-duplicates), so every field below is pinned to the value the 2017
-decode gives for the same entity. `tools/skp26.py` is the instrument;
-`crates/openskp/tests/read26.rs` checks all four files equivalent to
-their 2017 originals, and `theater_dae.rs` checks theater-2026 against
-the 2017 COLLADA export.
+conversion of the same-named 2017 file (`{26.2.0}`), plus two third-party
+production models converted the same way and kept outside the
+repository. Persistent ids survive the conversion (renumbered only where
+the 2017 file held duplicates), so every field below is pinned to the
+value the 2017 decode gives for the same entity. `tools/skp26.py` is the
+instrument; `crates/openskp/tests/read26.rs` checks every corpus pair
+equivalent, and the COLLADA-oracle tests run on the 2026 files as well as
+on their originals.
 
 Settings the corpus files do not vary are pinned by **one-change pairs**:
 `box.skp` saved twice with exactly one setting changed, either edited in
@@ -1123,14 +1133,15 @@ stored or DEFLATE-compressed with valid CRC-32s:
 | entry | contents |
 |---|---|
 | `model.dat` | the model: a record tree (§16.2) |
-| `meta/meta.dat` | version and entry list (short-tag records; not needed to read the model) |
+| `meta/meta.dat` | the same record format (§16.2) with one-byte tag values: a `0x64` container holding `0x75` the version string (`26.2.0`), `0x76` u16 (26), `0x77`/`0x73`/`0x74` u16 (1, 1, 17), `0x66` the model GUID (16 bytes, new on every save), and `0x67` the archive entry table |
 | `materials/<name>/material.xml` | one per material and per layer (`Layer_<name>`); §16.6 |
 | `materials/<name>/<image>` | texture images, byte-identical to the 2017 embedded images |
 | `thumbnails/<definition>.png`, `meta/*_thumbnail.png`, `scene_thumbnails/*.png` | preview images |
 | `styles/*/style.xml`, `watermarks/*`, `classifications/*.skc` | display and classification assets |
 
-The 2017 header's per-model GUID (§2) is not carried over: neither the
-header nor any archive entry holds it.
+The 2017 header's per-model GUID (§2) is not carried over: the
+conversion writes a new GUID into `meta/meta.dat` (`0x66`), and the 2017
+value appears nowhere in the archive.
 
 ### 16.2 The record tree
 
@@ -1182,6 +1193,7 @@ tags known to be containers.
 | `0x020c` | u8: anti-aliased textures (Model Info ▸ Rendering; the 2017 flag is in §10.11) |
 | `0x0214` (u8 0), `0x020f` (u32 0), `0x0210 > 0x7918`, `0x0213 > 0x7d64` | constant in every observed file (undecoded) |
 | `0x020d` | u32: 1 (`box`, `theater`), 2 (`feature-pack`), 3 (`house-plus`); not a style or scene count (undecoded) |
+| `0x0063` (u32 0), `0x0201` (empty), `0x020a` (the string `meta/meta.dat`) | constant in every observed file |
 
 ### 16.4 Entities
 
@@ -1443,7 +1455,7 @@ Components pairs. The same settings in a 2017 file are laid out in
 
 The 2017 file holds these settings in a binary record (§10.9), with
 the displayed flag in the rendering options, and each field equals its
-post-2017 counterpart in every conversion. It also carries a
+2026 counterpart in every conversion. It also carries a
 `TempShadowInfo` option set (`City`, `Country`, `Dark`,
 `DaylightSavings`, `DisplayNorth`, `DisplayOnAllFaces`,
 `DisplayOnGroundPlane`, `DisplayShadows`, `EdgesCastShadows`,
@@ -1611,7 +1623,9 @@ geometry and visible-layer properties, converted by the web app.
 
 ### 16.16 Known unknowns
 
-- The 13 header bytes after the version string; `meta/meta.dat`.
+- The 13 header bytes after the version string: `VFF`, u16 8, u16 1,
+  u16 17 in every observed file, then a u32 that differs per file and is
+  not the CRC-32 of the archive, of any entry, or of the header.
 - Top level: `0x020d` (varies 1–3) and the constant sections listed in
   §16.3; the model-axes reading of `0x01fc` (never moved).
 - Containers: the meaning of `0x139f`'s bits; `0x139b`, `0x139e`.
@@ -1631,7 +1645,7 @@ geometry and visible-layer properties, converted by the web app.
   `0x715b`, `0x715c`.
 - Layers `0x3c90` and the layer-folder root (paid-only features).
 - `UnitsOptions` `LengthFormat` 2 (engineering) is not offered by the web
-  app and does not survive conversion (§16.12), so whether a post-2017
+  app and does not survive conversion (§16.12), so whether a 2026
   file can hold it is unknown.
 - Releases 2018–2025: unobserved. `detect_container` accepts any file
   whose string records are followed by a ZIP archive, so the reader

@@ -78,7 +78,7 @@ fn id(data: &[u8]) -> ExitCode {
             println!("classes   {classes}");
         }
         openskp::Container::Zip => {
-            println!("container post-2017 ZIP (model.dat record tree)");
+            println!("container SketchUp 2026 (ZIP archive, model.dat record tree)");
         }
         openskp::Container::Unknown => {
             println!("container unknown — id only; not readable here");
@@ -95,7 +95,7 @@ fn summary(path: &str, m: &openskp::Model, data: &[u8]) {
     println!("== {name} ==  version {}", m.version);
     if openskp::detect_container(data) == openskp::Container::Zip {
         // Geometry offsets below are positions in the archive's model.dat.
-        println!("container: post-2017 ZIP (model.dat record tree)");
+        println!("container: SketchUp 2026 (ZIP archive, model.dat record tree)");
     } else {
         println!(
             "inventory: {} classes",

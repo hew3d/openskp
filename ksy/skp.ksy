@@ -1,6 +1,6 @@
 meta:
   id: skp
-  title: SketchUp 2017 model (.skp) — clean-room spec
+  title: SketchUp 2017 model (.skp) — clean-room grammar of the 2017 binary format (the 2026 container is specified in docs/SKP_FORMAT.md §16)
   file-extension: skp
   endian: le
   encoding: UTF-16LE
@@ -378,7 +378,7 @@ types:
         type: u1
       - id: tail
         type: u4
-        doc: 0 in every observed layer (the post-2017 0x3c90)
+        doc: 0 in every observed layer (the 2026 0x3c90)
   ccamera_body:
     doc: |
       CCamera schema 5 (SKP_FORMAT §10.6): NO preamble — 137-byte body,
@@ -476,7 +476,7 @@ types:
       - id: jpeg_quality
         type: u4
         if: dib.format == 1
-        doc: the post-2017 0x32cd
+        doc: the 2026 0x32cd
       - id: applied_width_in
         type: f8
       - id: applied_height_in

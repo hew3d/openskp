@@ -1,4 +1,4 @@
-//! Minimal read-only ZIP access for the post-2017 container (SKP_FORMAT
+//! Minimal read-only ZIP access for the 2026 container (SKP_FORMAT
 //! §14): the central directory, stored and DEFLATE entries, and a CRC-32
 //! check on every entry read. Follows the public PKWARE APPNOTE layout; no
 //! ZIP64, encryption, or multi-disk support (none observed in `.skp` files).
@@ -143,12 +143,26 @@ impl<'a> Archive<'a> {
         {
             return Err(format!("{}: implausible declared size {}", e.name, e.size));
         }
-        let out = match e.method {
-            0 => raw.to_vec(),
-            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(raw, e.size)
-                .map_err(|err| format!("{}: inflate failed: {err:?}", e.name))?,
+        // The output buffer is reserved fallibly: a host that cannot hold
+        // the entry gets an error, not an abort.
+        let mut out = Vec::new();
+        out.try_reserve_exact(e.size)
+            .map_err(|_| format!("{}: out of memory for {} bytes", e.name, e.size))?;
+        match e.method {
+            0 => out.extend_from_slice(raw),
+            8 => {
+                out.resize(e.size, 0);
+                let n = miniz_oxide::inflate::decompress_slice_iter_to_slice(
+                    &mut out,
+                    std::iter::once(raw),
+                    false,
+                    true,
+                )
+                .map_err(|err| format!("{}: inflate failed: {err:?}", e.name))?;
+                out.truncate(n);
+            }
             m => return Err(format!("{}: unsupported compression method {m}", e.name)),
-        };
+        }
         if out.len() != e.size {
             return Err(format!(
                 "{}: size {} != declared {}",

@@ -1,4 +1,4 @@
-//! The post-2017 settings records (SKP_FORMAT §16.9–§16.15) decoded into
+//! The 2026 settings records (SKP_FORMAT §16.9–§16.15) decoded into
 //! the typed structs of [`crate::settings`].
 
 use std::collections::HashMap;
@@ -190,6 +190,7 @@ fn style_settings(zip: &Archive<'_>, name: &str) -> (RenderingOptions, Vec<Water
 
 /// The styles of `0x0206` (§16.14): the saved styles, the active style's
 /// index, and the id → name map scenes refer to.
+#[derive(Default)]
 pub(crate) struct Styles26 {
     pub styles: Vec<Style>,
     pub active: Option<usize>,

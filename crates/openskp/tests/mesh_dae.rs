@@ -16,6 +16,34 @@ fn corpus(name: &str) -> Vec<u8> {
     std::fs::read(p).unwrap()
 }
 
+/// corpus/2026/`skp_name`, when the corpus carries it as the SketchUp web
+/// app's conversion of corpus/2017/`skp_name` (same model, same `.dae`
+/// ground truth — SketchUp 2026 twin).
+fn twin_2026(skp_name: &str) -> Option<PathBuf> {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("../../corpus/2026");
+    p.push(skp_name);
+    p.exists().then_some(p)
+}
+
+/// The model's own drawn geometry via the public `Model` API, container-
+/// agnostic: the root entity list, always the LAST geometry run (a
+/// default- or web-template's own construction content, when the walker
+/// surfaces it, precedes it — same convention `layer_hidden.rs` and
+/// `feature_pack.rs` use). Lets the 2026 twin be checked directly against
+/// the same COLLADA oracle as the 2017 file, through the public reader.
+fn user_mesh(path: &std::path::Path) -> openskp::Mesh {
+    let d = std::fs::read(path).unwrap();
+    let m = openskp::Model::parse(&d).expect("parse");
+    m.geometry
+        .iter()
+        .rev()
+        .find(|r| r.def_index.is_none())
+        .expect("root run")
+        .mesh
+        .clone()
+}
+
 // ---- a minimal COLLADA reader (SketchUp-export subset, tests only) ----
 
 struct DaeFace {
@@ -230,9 +258,10 @@ fn mesh_union(name: &str) -> openskp::Mesh {
     all
 }
 
-/// The full equivalence check for one file.
-fn check(name_skp: &str, name_dae: &str, expect_faces: usize) {
-    let mesh = mesh_union(name_skp);
+/// The full equivalence check for one file, against the mesh materialized
+/// under `label` (used only in assertion messages).
+fn check_mesh(label: &str, mesh: openskp::Mesh, name_dae: &str, expect_faces: usize) {
+    let name_skp = label;
     let dae = dae_faces(name_dae);
     assert_eq!(
         dae.len(),
@@ -312,6 +341,22 @@ fn check(name_skp: &str, name_dae: &str, expect_faces: usize) {
         dae_full, our_full,
         "{name_skp}: dae/mesh face ring sets differ"
     );
+}
+
+/// Runs the equivalence check against the 2017 file, and against its 2026
+/// twin too when the corpus carries one — the same `.dae` is ground truth
+/// for both (corpus/2026/<name> is the SketchUp web app's conversion of
+/// corpus/2017/<name>).
+fn check(name_skp: &str, name_dae: &str, expect_faces: usize) {
+    check_mesh(name_skp, mesh_union(name_skp), name_dae, expect_faces);
+    if let Some(p) = twin_2026(name_skp) {
+        check_mesh(
+            &format!("2026/{name_skp}"),
+            user_mesh(&p),
+            name_dae,
+            expect_faces,
+        );
+    }
 }
 
 #[test]

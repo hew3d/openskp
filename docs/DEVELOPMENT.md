@@ -56,8 +56,11 @@ continue-past-unknown parsing has to be architected, not patched in.
 - **`crates/openskp`** — the reference implementation. Key seams:
   - `carchive.rs` — the MFC tag protocol, one shared store map, big-tag
     escapes, escalated strings.
+  - `read26.rs`, `settings26.rs`, `zip.rs` — the 2026 container: the ZIP
+    reader and the tagged record tree; the path every current SketchUp
+    file takes.
   - `walk2.rs` — the continuous single-archive walk with deterministic
-    slot-base calibration; the primary path for every 2017 file.
+    slot-base calibration; the path for every 2017 file.
   - `walk.rs` / `resolve.rs` — the legacy run-based walk and modal-base
     back-reference voting; frozen, serves 2013–2016 degraded reads.
   - `entity.rs` — per-class body readers in a `(class, schema range)`
@@ -132,11 +135,15 @@ Roughly in order of likely value:
   (material color is known to round-trip byte-exactly), then full
   `CArchive` authoring with save-noise reproduction (doc id, re-rendered
   thumbnails). A distinct, larger effort than reading.
-- **Post-2017 coverage.** SketchUp 2026 files read through
-  `read26.rs` (`docs/SKP_FORMAT.md` §16). Releases 2018–2025 are
-  unobserved; text/dimension bodies, scene cameras, and styles are not
-  yet decoded (§16.9). New 2026 evidence is cheapest as web-app
-  conversions of existing 2017 corpus files (`corpus/2026/README.md`).
+- **Releases 2018–2025.** Unobserved. `detect_container` reads any file
+  whose header strings are followed by a ZIP archive as a 2026 file, and
+  the 2026 reader reports record tags it does not know at the top level
+  and in entity containers as diagnostics, so a file from those releases
+  would parse with its structural differences listed rather than fail. Evidence would need saves from those releases.
+- **Remaining 2026 unknowns.** `docs/SKP_FORMAT.md` §16.16. New 2026
+  evidence is cheapest as web-app conversions of 2017 corpus files
+  (`corpus/2026/README.md`); settings the web app cannot edit come from
+  SketchUp Make 2017 pairs converted the same way.
 - **2013–2016 body decode.** The container parses today; class bodies
   differ per release. The `(class, schema range)` registry is the
   intended landing zone; an evidence corpus per release would be needed.

@@ -389,6 +389,7 @@ pub fn guides(d: &[u8]) -> Vec<Guide> {
                 let mag = (dr[0] * dr[0] + dr[1] * dr[1] + dr[2] * dr[2]).sqrt();
                 if pt.iter().all(|x| x.abs() < 1e5) && (mag - 1.0).abs() < 1e-6 {
                     out.push(Guide {
+                        def_index: None,
                         point_m: [
                             round_to(pt[0] / INCH, 5),
                             round_to(pt[1] / INCH, 5),

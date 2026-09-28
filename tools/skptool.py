@@ -183,7 +183,7 @@ def cmd_classdelta(a, b):
 
 # SKP_FORMAT §10.7: offset from the field block's start -> (type, name).
 # The block starts 3 bytes after the 33-byte tail of the file's first
-# CCamera (the current view); validated against the post-2017 conversion
+# CCamera (the current view); validated against the 2026 conversion
 # of every corpus model and 51 one-change pairs.
 RENDERING = [
     (0, "u32", "face_style"), (4, "u8", "xray"), (5, "u8", "transparency"),

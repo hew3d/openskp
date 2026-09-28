@@ -18,6 +18,26 @@ fn model(name: &str) -> openskp::Model {
     openskp::Model::parse(&std::fs::read(p).unwrap()).unwrap()
 }
 
+/// corpus-relative paths to check: the 2017 file, plus its 2026 twin when
+/// the corpus carries one.
+fn twins(name: &str) -> Vec<String> {
+    let mut out = vec![format!("2017/{name}")];
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("../../corpus/2026");
+    p.push(name);
+    if p.exists() {
+        out.push(format!("2026/{name}"));
+    }
+    out
+}
+
+fn model_rel(rel: &str) -> openskp::Model {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("../../corpus");
+    p.push(rel);
+    openskp::Model::parse(&std::fs::read(p).unwrap()).unwrap()
+}
+
 /// The user drawing's run: the model-root entity list (last on the
 /// continuous path; single-run legacy files degenerate to the same).
 fn user_run(m: &openskp::Model) -> &openskp::GeometryRun {
@@ -93,11 +113,13 @@ fn layers_entity_binding() {
 
 #[test]
 fn default_layer_binding() {
-    let m = model("box.skp");
-    let run = user_run(&m);
-    assert_eq!(run.mesh.edges.len(), 12, "the drawn cube");
-    for e in &run.mesh.edges {
-        assert_eq!(e.layer, 0);
-        assert_eq!(m.layer_of(e.layer).unwrap().name, "Layer0");
+    for rel in twins("box.skp") {
+        let m = model_rel(&rel);
+        let run = user_run(&m);
+        assert_eq!(run.mesh.edges.len(), 12, "{rel}: the drawn cube");
+        for e in &run.mesh.edges {
+            assert_eq!(e.layer, 0, "{rel}");
+            assert_eq!(m.layer_of(e.layer).unwrap().name, "Layer0", "{rel}");
+        }
     }
 }

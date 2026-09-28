@@ -128,6 +128,14 @@ fn matches_python_reference() {
         ] {
             act.as_object_mut().unwrap().remove(k);
         }
+        // The oracle's guides carry no owner.
+        if let Some(Value::Array(guides)) = act.as_object_mut().unwrap().get_mut("guides") {
+            for g in guides.iter_mut() {
+                if let Some(o) = g.as_object_mut() {
+                    o.remove("def_index");
+                }
+            }
+        }
         if let Some(Value::Array(scenes)) = act.as_object_mut().unwrap().get_mut("scenes") {
             for s in scenes.iter_mut() {
                 *s = s["name"].clone();

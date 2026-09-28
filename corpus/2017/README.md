@@ -95,7 +95,7 @@ content as ordinary model content).
 | `two-scenes.skp` | Two saved scenes — page records and their embedded cameras. |
 | `scene-properties.skp` | `box.skp` plus one scene with a description ("Front view") and its Hidden Geometry property cleared (flags `0x0FEF`) — scene records beyond the default empty description and flags `0x7F` (§10.6). |
 | `scene-no-camera.skp` | `box.skp` plus one scene that saves every property except the camera (flags `0x7E`); the record holds no CCamera (§10.10). |
-| `units-engineering.skp` | `box.skp` with Model Info ▸ Units ▸ Format set to Engineering (`LengthFormat` 2, a format the post-2017 conversion rewrites; §16.12). |
+| `units-engineering.skp` | `box.skp` with Model Info ▸ Units ▸ Format set to Engineering (`LengthFormat` 2, a format the 2026 conversion rewrites; §16.12). |
 | `dimension-defaults.skp` | `box.skp` with Model Info ▸ Dimensions ▸ text "Align to dimension line" and its position Centered (the position control is enabled only once aligned, so the two change together) — the dimension defaults in the document tail (§10.11); no dimension entity. |
 | `dimension-color.skp` | `box.skp` with Model Info ▸ Dimensions ▸ colour set to (18, 52, 86) (§10.11). |
 | `dimension-arrow-none.skp` | `box.skp` with Model Info ▸ Dimensions ▸ Endpoints set to None (arrow 0; the default is Closed, 3) (§10.11). |

@@ -8,8 +8,27 @@
 use std::path::PathBuf;
 
 fn corpus(name: &str) -> Vec<u8> {
+    corpus_at("2017", name)
+}
+
+/// A 2017 corpus file and its SketchUp 2026 twin (`corpus/2026/<name>`,
+/// the web app's conversion of the same model; the same expectations
+/// apply).
+fn twin_dirs(name: &str) -> Vec<&'static str> {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("../../corpus/2017");
+    p.push("../../corpus/2026");
+    p.push(name);
+    if p.exists() {
+        vec!["2017", "2026"]
+    } else {
+        vec!["2017"]
+    }
+}
+
+fn corpus_at(dir: &str, name: &str) -> Vec<u8> {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("../../corpus");
+    p.push(dir);
     p.push(name);
     std::fs::read(p).unwrap()
 }
@@ -68,16 +87,18 @@ fn component_files_link_structurally() {
         ),
     ];
     for (file, expected) in cases {
-        let m = openskp::Model::parse(&corpus(file)).unwrap();
-        let want: Vec<(Option<String>, [f64; 3])> = expected
-            .iter()
-            .map(|(n, t)| (Some(n.to_string()), *t))
-            .collect();
-        assert_eq!(linkage(&m), want, "{file}: linkage");
-        assert!(
-            !fell_back(&m),
-            "{file}: expected the STRUCTURAL link, got the zip fallback"
-        );
+        for dir in twin_dirs(file) {
+            let m = openskp::Model::parse(&corpus_at(dir, file)).unwrap();
+            let want: Vec<(Option<String>, [f64; 3])> = expected
+                .iter()
+                .map(|(n, t)| (Some(n.to_string()), *t))
+                .collect();
+            assert_eq!(linkage(&m), want, "{dir}/{file}: linkage");
+            assert!(
+                !fell_back(&m),
+                "{dir}/{file}: expected the STRUCTURAL link, got the zip fallback"
+            );
+        }
     }
 }
 
@@ -114,38 +135,49 @@ fn declared_def_indexes_are_exposed() {
 /// acceptance shape, early.
 #[test]
 fn mixed_definition_links_structurally_with_the_inner_cube() {
-    let m = openskp::Model::parse(&corpus("mixed-definition.skp")).unwrap();
-    assert!(
-        !fell_back(&m),
-        "mixed-definition: expected the STRUCTURAL link; diagnostics: {:?}",
-        m.diagnostics
-    );
-    assert_eq!(
-        linkage(&m),
-        vec![
-            (Some("0.5 box".to_string()), [1.0, 0.0, 0.5]),
-            (Some("Outer Component".to_string()), [0.0, 0.0, 0.0]),
-        ],
-        "mixed-definition: linked names/translations"
-    );
-    let cube = m
-        .geometry
-        .iter()
-        .find(|r| r.def_index == Some(22))
-        .expect("the 0.5 box definition's own run (global slot 22)");
-    // (Formerly pinned `cube.start == 0x2f01`, the entity LIST offset the
-    // legacy cluster heuristic used to miss; on the §4s continuous path a
-    // run's span starts at the definition's own record tag instead.)
-    assert_eq!(
-        (
-            cube.topology.vertices,
-            cube.topology.edges,
-            cube.topology.faces
-        ),
-        (8, 12, 6),
-        "full cube topology from a definition that also holds unknowns"
-    );
-    assert_eq!(cube.resolved.0, cube.resolved.1, "100% back-refs");
+    for dir in twin_dirs("mixed-definition.skp") {
+        let m = openskp::Model::parse(&corpus_at(dir, "mixed-definition.skp")).unwrap();
+        assert!(
+            !fell_back(&m),
+            "mixed-definition: expected the STRUCTURAL link; diagnostics: {:?}",
+            m.diagnostics
+        );
+        assert_eq!(
+            linkage(&m),
+            vec![
+                (Some("0.5 box".to_string()), [1.0, 0.0, 0.5]),
+                (Some("Outer Component".to_string()), [0.0, 0.0, 0.0]),
+            ],
+            "mixed-definition: linked names/translations"
+        );
+        // The definition's own run, by the identity `Definition::map_index`
+        // shares with `GeometryRun::def_index` (global slot 22 on the 2017
+        // walk, the persistent id on a 2026 file).
+        let cube_id = m
+            .definitions
+            .iter()
+            .find(|d| d.name == "0.5 box")
+            .and_then(|d| d.map_index)
+            .expect("the 0.5 box definition");
+        let cube = m
+            .geometry
+            .iter()
+            .find(|r| r.def_index == Some(cube_id))
+            .expect("the 0.5 box definition's own run");
+        // (Formerly pinned `cube.start == 0x2f01`, the entity LIST offset the
+        // legacy cluster heuristic used to miss; on the §4s continuous path a
+        // run's span starts at the definition's own record tag instead.)
+        assert_eq!(
+            (
+                cube.topology.vertices,
+                cube.topology.edges,
+                cube.topology.faces
+            ),
+            (8, 12, 6),
+            "full cube topology from a definition that also holds unknowns"
+        );
+        assert_eq!(cube.resolved.0, cube.resolved.1, "100% back-refs");
+    }
 }
 
 /// long-name was the zip-fallback poster child on the legacy path (TWO
@@ -158,34 +190,39 @@ fn mixed_definition_links_structurally_with_the_inner_cube() {
 /// dies — diagnostics.rs's corrupted-stream test covers that route.)
 #[test]
 fn long_name_links_exactly_on_the_continuous_path() {
-    let m = openskp::Model::parse(&corpus("long-name.skp")).unwrap();
-    assert!(
-        m.diagnostics
-            .iter()
-            .any(|d| matches!(d, openskp::Diagnostic::ContinuousWalk { .. })),
-        "long-name: expected the continuous walk; diagnostics: {:?}",
-        m.diagnostics
-    );
-    assert!(
-        !fell_back(&m),
-        "long-name: continuous def-refs are exact — no zip fallback; diagnostics: {:?}",
-        m.diagnostics
-    );
-    // The exact link lands on the definition the instance ACTUALLY
-    // references (@0x13687-era serialization): the one carrying the
-    // authored >255-char name — the escalated-length string record this
-    // file exists to exercise. (The legacy zip used to link the stale
-    // "Box Component" copy instead, because its byte-scan could only see
-    // that one name record.)
-    let links = linkage(&m);
-    assert_eq!(links.len(), 1, "one placed instance");
-    let (name, t) = &links[0];
-    let name = name.as_deref().expect("linked definition name");
-    assert!(
-        name.chars().count() > 255,
-        "the authored long name (>255 chars), got {} chars",
-        name.chars().count()
-    );
-    assert!(name.starts_with("This is a component of a simple 1m square unit box"));
-    assert_eq!(*t, [0.0, 0.0, 0.0]);
+    for dir in twin_dirs("long-name.skp") {
+        let m = openskp::Model::parse(&corpus_at(dir, "long-name.skp")).unwrap();
+        // The continuous walk is the 2017 path; a 2026 file has no such diagnostic.
+        if dir == "2017" {
+            assert!(
+                m.diagnostics
+                    .iter()
+                    .any(|d| matches!(d, openskp::Diagnostic::ContinuousWalk { .. })),
+                "long-name: expected the continuous walk; diagnostics: {:?}",
+                m.diagnostics
+            );
+        }
+        assert!(
+            !fell_back(&m),
+            "long-name: continuous def-refs are exact — no zip fallback; diagnostics: {:?}",
+            m.diagnostics
+        );
+        // The exact link lands on the definition the instance ACTUALLY
+        // references (@0x13687-era serialization): the one carrying the
+        // authored >255-char name — the escalated-length string record this
+        // file exists to exercise. (The legacy zip used to link the stale
+        // "Box Component" copy instead, because its byte-scan could only see
+        // that one name record.)
+        let links = linkage(&m);
+        assert_eq!(links.len(), 1, "one placed instance");
+        let (name, t) = &links[0];
+        let name = name.as_deref().expect("linked definition name");
+        assert!(
+            name.chars().count() > 255,
+            "the authored long name (>255 chars), got {} chars",
+            name.chars().count()
+        );
+        assert!(name.starts_with("This is a component of a simple 1m square unit box"));
+        assert_eq!(*t, [0.0, 0.0, 0.0]);
+    }
 }

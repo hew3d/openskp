@@ -171,7 +171,7 @@ impl Model {
     /// abandoned attempt is recorded as a `ContinuousFallback` diagnostic —
     /// which path ran is never silent.
     pub fn parse(d: &[u8]) -> Result<Model, Error> {
-        // Container gate (Phase 0.1): the post-2017 ZIP container has its
+        // Container gate (Phase 0.1): the 2026 container has its
         // own reader; anything unrecognized is refused cleanly instead of
         // walked. `header_info` still identifies such files.
         match crate::ctx::detect_container(d) {
@@ -184,7 +184,7 @@ impl Model {
             crate::ctx::Container::Unknown => {
                 return Err(Error(
                     "unsupported .skp container: neither the 2013–2017 MFC CArchive \
-                     layout nor the post-2017 ZIP layout"
+                     layout nor the 2026 container layout"
                         .into(),
                 ))
             }
@@ -411,6 +411,9 @@ impl Model {
 
         // One geometry run per definition (its subtree is a contiguous
         // global-map slot range) + one for the root entity list.
+        // Guides come from the map, run by run (the byte scan only finds
+        // the first CConstructionLine, the one carrying the class name).
+        let guides17 = std::cell::RefCell::new(Vec::new());
         let run_of = |start: usize,
                       end: usize,
                       top_level: usize,
@@ -419,6 +422,23 @@ impl Model {
                       lo: usize,
                       hi: usize|
          -> GeometryRun {
+            let r5 = |x: f64| (x * 1e5).round() / 1e5;
+            guides17.borrow_mut().extend(
+                map[lo.min(map.len())..hi.min(map.len())]
+                    .iter()
+                    .filter_map(|s| match s {
+                        Slot::Object(Entity::ConstructionLine { params, .. }) => Some(Guide {
+                            def_index,
+                            point_m: [
+                                r5(params[0] / INCH),
+                                r5(params[1] / INCH),
+                                r5(params[2] / INCH),
+                            ],
+                            direction: [r5(params[3]), r5(params[4]), r5(params[5])],
+                        }),
+                        _ => None,
+                    }),
+            );
             let count = |cls: &str| {
                 map[lo.min(map.len())..hi.min(map.len())]
                     .iter()
@@ -615,7 +635,7 @@ impl Model {
             materials,
             layers,
             scenes: s17.scenes,
-            guides: extract::guides(d),
+            guides: guides17.into_inner(),
             attributes,
             images: extract::images(d),
             camera: s17.camera,
@@ -948,6 +968,8 @@ impl Model {
         j.key("guides");
         j.arr(&self.guides, |j, g: &Guide| {
             j.begin_obj();
+            j.key("def_index");
+            opt_index(j, g.def_index);
             j.key("point_m");
             j.f64_arr(&g.point_m);
             j.key("direction");
