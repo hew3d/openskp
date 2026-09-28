@@ -1,6 +1,7 @@
-//! Clean-room reader for the SketchUp `.skp` binary format (SketchUp 2017,
-//! v17.3.116 and nearby). Derived solely from observed `.skp` files and their
-//! COLLADA exports — no Trimble SDK. See `docs/SKP_FORMAT.md` for the format
+//! Clean-room reader for the SketchUp `.skp` format: the 2017 binary format
+//! (v17.3.116 and nearby) and the post-2017 ZIP container (SketchUp 2026).
+//! Derived solely from observed `.skp` files and their COLLADA exports — no
+//! Trimble SDK. See `docs/SKP_FORMAT.md` for the format
 //! and `docs/SDK.md` for how to use this crate.
 
 mod carchive;
@@ -11,20 +12,34 @@ mod header;
 mod matwalk;
 mod mesh;
 mod model;
+mod read26;
 mod resolve;
+mod settings;
+mod settings17;
+mod settings26;
 mod walk;
 mod walk2;
+mod zip;
 
 pub use carchive::{mfc_strlen, Stall};
 pub use ctx::{detect_container, Container, Ctx};
 pub use mesh::{FaceTexture, Mesh, MeshEdge, MeshFace, Side, UvXform};
 pub use model::{Error, Model, Node};
+pub use settings::{
+    Anchor, Animation, Axes, Behaviour, Camera, Dimension, DimensionDefaults, Font, Leader,
+    RenderingOptions, Scene, SceneProperties, ShadowInfo, Style, Text, TextDefaults, Units,
+    Watermark,
+};
 
-/// Header-only identification: `(version, format_guid)` — works even when the
+/// Header-only identification: `(version, model_guid)` — works even when the
 /// container is unreadable past the fixed header (e.g. post-2017 files), so
-/// tooling can always say WHAT a file is before refusing it.
-pub fn header_info(d: &[u8]) -> Option<(String, String)> {
-    header::parse_header(d).map(|h| (h.version, h.format_guid))
+/// tooling can always say WHAT a file is before refusing it. The model GUID
+/// is a per-model identifier the 2013–2017 header carries (SKP_FORMAT §3);
+/// it is `None` for any other container, whose header has no such field.
+pub fn header_info(d: &[u8]) -> Option<(String, Option<String>)> {
+    let h = header::parse_header(d)?;
+    let guid = (detect_container(d) == Container::Carchive2017).then_some(h.model_guid);
+    Some((h.version, guid))
 }
 
 /// 1 metre in inches; `.skp` stores coordinates as f64 inches.
@@ -35,10 +50,16 @@ pub const INCH: f64 = 39.37007874015748;
 pub struct Definition {
     pub name: String,
     pub guid: String,
-    /// The definition object's GLOBAL archive map slot (SKP_FORMAT §4s) —
-    /// exactly what instance def-refs carry. `Some` on the continuous
-    /// path; `None` on the legacy byte-scan path (which links positionally
-    /// through `Model::definition_links` instead).
+    /// Component behaviour (§7.1, §16.5).
+    pub behaviour: Behaviour,
+    /// UNIX time of the definition's last edit; 0 when the reader could
+    /// not see it.
+    pub timestamp: u32,
+    /// The key instance def-refs carry: on the 2017 continuous path the
+    /// definition object's GLOBAL archive map slot (SKP_FORMAT §4s); on the
+    /// post-2017 path the definition's entity-container persistent id
+    /// (§16.5). `None` on the legacy byte-scan path (which links
+    /// positionally through `Model::definition_links` instead).
     pub map_index: Option<usize>,
 }
 

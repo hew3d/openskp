@@ -68,19 +68,43 @@ pub enum Entity {
         pid: u32,
         params: [f64; 14],
     },
-    /// A linear dimension (Phase 2.2 "Full-enough": exact consumption,
-    /// pid + material binding; semantic fields still TBD — SKP_FORMAT §4k).
+    /// A linear dimension (SKP_FORMAT §10.1).
     Dimension {
         pid: u32,
+        text_override: String,
+        font: Child,
+        /// `(kind, point in inches, entity)` for the start and end anchors.
+        anchors: [(u32, [f64; 3], Child); 2],
+        normal: [f64; 3],
+        x_axis: [f64; 3],
+        /// Inches.
+        offset: f64,
+        text_position: u32,
+        aligned: bool,
     },
-    /// A text annotation — leader or screen text (Phase 2.2, SKP_FORMAT §4k).
+    /// A text annotation — leader or screen text (SKP_FORMAT §10.2). The
+    /// fields after `content` are decoded only when the middle has the
+    /// documented length; otherwise they stay at their defaults.
     Text {
         pid: u32,
         content: String,
+        font: Child,
+        screen_position: [f64; 2],
+        anchor_kind: u32,
+        /// Inches.
+        anchor_point: [f64; 3],
+        anchor_entity: Child,
+        /// Inches for a pushpin leader, screen space otherwise.
+        leader_offset: [f64; 3],
+        leader: u32,
+        arrow: u32,
     },
     /// A font object (inline in dimension/text bodies).
     Font {
         name: String,
+        bold: bool,
+        italic: bool,
+        size_pt: u32,
     },
     /// An in-list component/group instance (Phase 3.3, SKP_FORMAT §4o):
     /// the def-ref is the referenced definition's declared map index (on the
@@ -159,6 +183,7 @@ pub enum Entity {
         count: usize,
         entities: Vec<Child>,
         timestamp: u32,
+        behaviour: crate::settings::Behaviour,
     },
     /// A definition preview — schema 1 (§4s): camera + nullable image.
     Thumbnail {
@@ -234,6 +259,28 @@ pub enum Entity {
 }
 
 impl Entity {
+    /// The persistent id of an entity that has one.
+    pub fn pid(&self) -> Option<u32> {
+        match self {
+            Entity::Vertex { pid, .. } => Some(*pid),
+            Entity::Edge { pid, .. } => Some(*pid),
+            Entity::Face { pid, .. } => Some(*pid),
+            Entity::ArcCurve { pid, .. } => Some(*pid),
+            Entity::Dimension { pid, .. } => Some(*pid),
+            Entity::Text { pid, .. } => Some(*pid),
+            Entity::InstancePlaced { pid, .. } => Some(*pid),
+            Entity::SectionPlane { pid, .. } => Some(*pid),
+            Entity::ConstructionPoint { pid, .. } => Some(*pid),
+            Entity::ConstructionLine { pid, .. } => Some(*pid),
+            Entity::Image { pid, .. } => Some(*pid),
+            Entity::Layer { pid, .. } => Some(*pid),
+            Entity::ComponentDef { pid, .. } => Some(*pid),
+            Entity::FaceTextureCoords { pid, .. } => Some(*pid),
+            Entity::Curve { pid, .. } => Some(*pid),
+            Entity::Relationship { pid, .. } => Some(*pid),
+            _ => None,
+        }
+    }
     /// The MFC class name of this object (used by counting + resolution).
     pub fn class_name(&self) -> &str {
         match self {
@@ -516,8 +563,13 @@ fn r_cface(ar: &mut CArchive) -> Result<Entity, Stall> {
 fn r_cskfont(ar: &mut CArchive) -> Result<Entity, Stall> {
     ar.take(3)?; // 00 00 00 (pid-less)
     let name = ar.utf16()?;
-    ar.take(15)?; // u16 + u32 + f64 size + u8
-    Ok(Entity::Font { name })
+    let t = ar.take(15)?; // bold, italic, u32 size, u8, f64 (§10.1)
+    Ok(Entity::Font {
+        name,
+        bold: t[0] != 0,
+        italic: t[1] != 0,
+        size_pt: u32::from_le_bytes([t[2], t[3], t[4], t[5]]),
+    })
 }
 
 /// `CDimensionLinear` schema 6 (SKP_FORMAT §4k, tail DECODED on
@@ -525,8 +577,8 @@ fn r_cskfont(ar: &mut CArchive) -> Result<Entity, Stall> {
 /// corpus): preamble + 10-byte drawbase (matref binds the dimension's
 /// material) + text-override string + font object (inline or back-ref) +
 /// u32 flags + TWO ANCHOR BLOCKS (`u32(2) u32(4) 3×f64 point +
-/// entity OBJECT POINTER + u16 + u32 ref-count + count × object pointers
-/// + u32(0)`) + 6×f64 2D basis + u32 + 2×f64 (offset, reserved) + u32.
+/// entity OBJECT POINTER + u16 + u32 ref-count + count × object pointers +
+/// u32(0)`) + 6×f64 2D basis + u32 + 2×f64 (offset, reserved) + u32.
 /// The pointers are back-ref words on the corpus (no map slots) but
 /// escalate through `7F FF` + u32 on giant maps (guest-house dims
 /// @0x3671f3b carry 3-ref anchor lists with escalated pointers), which is
@@ -534,30 +586,46 @@ fn r_cskfont(ar: &mut CArchive) -> Result<Entity, Stall> {
 fn r_cdimensionlinear(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     ar.take(10)?; // drawbase (matref u16 + flags)
-    let _text_override = ar.utf16()?;
-    let _font = ar.read_object()?;
-    ar.take(1)?; // u8 after the font object (present for inline AND
-                 // back-ref fonts — guest-house dim #2 pins it outside
-                 // the CSkFont record)
-    ar.take(4)?; // u32 flags
-    for _ in 0..2 {
-        ar.take(32)?; // u32(2) + u32(4) + 3×f64 anchor point
-        ar.read_object()?; // anchor entity pointer
+    let text_override = ar.utf16()?;
+    let font = ar.read_object()?;
+    let aligned = ar.take(1)?[0] != 0; // u8 after the font object (present for
+                                       // inline AND back-ref fonts — guest-house
+                                       // dim #2 pins it outside the CSkFont record)
+    ar.take(4)?; // u32 arrow
+    let mut anchors = [(0u32, [0.0; 3], Child::Null), (0u32, [0.0; 3], Child::Null)];
+    for a in anchors.iter_mut() {
+        let kind = ar.u4()?;
+        ar.take(4)?; // u32(4)
+        let point = [ar.f8()?, ar.f8()?, ar.f8()?];
+        let entity = ar.read_object()?; // anchor entity pointer
         ar.take(2)?; // u16
         let n = ar.u4()? as usize;
         if n > 64 {
             return Err(Stall::new("<dim anchor refs>", ar.pos, ar.map.len()));
         }
         for _ in 0..n {
-            ar.read_object()?; // style/axis object pointers
+            ar.read_object()?; // instance path
         }
         ar.take(4)?; // trailing u32 (0)
+        *a = (kind, point, entity);
     }
-    ar.take(48)?; // 6×f64 2D basis
-    ar.take(4)?; // u32
-    ar.take(16)?; // 2×f64 (dimension offset, reserved)
-    ar.take(4)?; // u32
-    Ok(Entity::Dimension { pid })
+    let normal = [ar.f8()?, ar.f8()?, ar.f8()?];
+    let x_axis = [ar.f8()?, ar.f8()?, ar.f8()?];
+    ar.take(4)?; // u32 (1 or 2)
+    let offset = ar.f8()?;
+    ar.take(8)?; // f64 0
+    let text_position = ar.u4()?;
+    Ok(Entity::Dimension {
+        pid,
+        text_override,
+        font,
+        anchors,
+        normal,
+        x_axis,
+        offset,
+        text_position,
+        aligned,
+    })
 }
 
 /// `CText` schema 9 (SKP_FORMAT §4k): preamble + 10-byte drawbase + font
@@ -572,7 +640,7 @@ fn r_ctext(ar: &mut CArchive) -> Result<Entity, Stall> {
     const PRE_STRING: [u8; 11] = [1, 0, 0, 0, 1, 0, 3, 0, 0, 0, 1];
     let pid = entity_preamble(ar)?;
     ar.take(10)?; // drawbase
-    let _font = ar.read_object()?;
+    let font = ar.read_object()?;
     let start = ar.pos;
     let end = ar.d.len().min(start + 512).saturating_sub(14);
     let Some(p) = (start..end)
@@ -582,10 +650,62 @@ fn r_ctext(ar: &mut CArchive) -> Result<Entity, Stall> {
         ar.pos = start;
         return Err(Stall::new("<ctext middle unbounded>", start, mapindex));
     };
+    // The middle (§10.2): 2 f64 screen position, anchor (u32 kind, u32 4,
+    // 3 f64 point, entity reference, u16, u32 n + n references, u32), 3 f64
+    // leader offset, 3 f64 view direction, u32 leader, u32, u8, u8, u32
+    // arrow, u8 — decoded by walking it, and kept only when the walk
+    // lands exactly on the string marker.
+    ar.pos = start;
+    let mut mid = None;
+    let walk = |ar: &mut CArchive| -> Result<_, Stall> {
+        let screen = [ar.f8()?, ar.f8()?];
+        let kind = ar.u4()?;
+        ar.take(4)?;
+        let point = [ar.f8()?, ar.f8()?, ar.f8()?];
+        let entity = ar.read_object()?;
+        ar.take(2)?;
+        let n = ar.u4()? as usize;
+        if n > 64 {
+            return Err(Stall::new("<text anchor refs>", ar.pos, ar.map.len()));
+        }
+        for _ in 0..n {
+            ar.read_object()?;
+        }
+        ar.take(4)?;
+        let offset = [ar.f8()?, ar.f8()?, ar.f8()?];
+        ar.take(24)?; // view direction
+        let leader = ar.u4()?;
+        ar.take(6)?; // u32, u8, u8
+        let arrow = ar.u4()?;
+        ar.take(1)?;
+        Ok((screen, kind, point, entity, offset, leader, arrow))
+    };
+    let saved = ar.map.len();
+    if let Ok(m) = walk(ar) {
+        if ar.pos == p + 11 {
+            mid = Some(m);
+        }
+    }
+    if mid.is_none() {
+        ar.map.truncate(saved);
+    }
     ar.pos = p + 11;
     let content = ar.utf16()?;
     ar.take(5)?;
-    Ok(Entity::Text { pid, content })
+    let (screen_position, anchor_kind, anchor_point, anchor_entity, leader_offset, leader, arrow) =
+        mid.unwrap_or(([0.0; 2], 0, [0.0; 3], Child::Null, [0.0; 3], 0, 0));
+    Ok(Entity::Text {
+        pid,
+        content,
+        font,
+        screen_position,
+        anchor_kind,
+        anchor_point,
+        anchor_entity,
+        leader_offset,
+        leader,
+        arrow,
+    })
 }
 
 /// `CSectionPlane` schema 2 (SKP_FORMAT §4l): preamble + drawbase + plane
@@ -823,9 +943,22 @@ fn r_ccomponentdefinition(ar: &mut CArchive) -> Result<Entity, Stall> {
             (guid, name, desc, timestamp)
         }
     };
+    // Behaviour (§7.1): after the timestamp come a u32 and 24 bytes, then
+    // u8 glues, u8 cuts, u32 plane, u8 bits (1 faces the camera, 2 shadows
+    // face the sun). Only read when the definition carries its own tail.
+    let p = ar.pos;
+    let behaviour = match (own_tail, ar.d.get(p + 28..p + 35)) {
+        (true, Some(b)) => crate::settings::Behaviour {
+            glues_to_surface: b[0] != 0,
+            cuts_opening: b[1] != 0,
+            glue_plane: u32::from_le_bytes([b[2], b[3], b[4], b[5]]),
+            always_faces_camera: b[6] & 1 != 0,
+            shadows_face_sun: b[6] & 2 != 0,
+        },
+        _ => Default::default(),
+    };
     // Midtail: scan for the thumbnail structurally (§4s: the block between
     // the timestamp and the thumbnail varies 42–47 bytes and is not pinned).
-    let p = ar.pos;
     let mut thumb_at = None;
     for q in p..(p + 96).min(ar.d.len().saturating_sub(10)) {
         let w = u16::from_le_bytes([ar.d[q], ar.d[q + 1]]);
@@ -856,6 +989,7 @@ fn r_ccomponentdefinition(ar: &mut CArchive) -> Result<Entity, Stall> {
         count,
         entities,
         timestamp,
+        behaviour,
     })
 }
 

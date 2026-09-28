@@ -93,6 +93,21 @@ content as ordinary model content).
 | `guide.skp` | An infinite construction line 1 m off axis — anchor, unit direction, and the ±1e30 infinite-bounds sentinel. |
 | `image.skp` | An imported raster image placed at 1 m width — the `CImage` entity. |
 | `two-scenes.skp` | Two saved scenes — page records and their embedded cameras. |
+| `scene-properties.skp` | `box.skp` plus one scene with a description ("Front view") and its Hidden Geometry property cleared (flags `0x0FEF`) — scene records beyond the default empty description and flags `0x7F` (§10.6). |
+| `scene-no-camera.skp` | `box.skp` plus one scene that saves every property except the camera (flags `0x7E`); the record holds no CCamera (§10.10). |
+| `units-engineering.skp` | `box.skp` with Model Info ▸ Units ▸ Format set to Engineering (`LengthFormat` 2, a format the post-2017 conversion rewrites; §16.12). |
+| `dimension-defaults.skp` | `box.skp` with Model Info ▸ Dimensions ▸ text "Align to dimension line" and its position Centered (the position control is enabled only once aligned, so the two change together) — the dimension defaults in the document tail (§10.11); no dimension entity. |
+| `dimension-color.skp` | `box.skp` with Model Info ▸ Dimensions ▸ colour set to (18, 52, 86) (§10.11). |
+| `dimension-arrow-none.skp` | `box.skp` with Model Info ▸ Dimensions ▸ Endpoints set to None (arrow 0; the default is Closed, 3) (§10.11). |
+| `text-defaults.skp` | `box.skp` with Model Info ▸ Text ▸ Leader Text colour set to (101, 67, 32) — the text defaults in the document tail (§10.11); no text entity. |
+| `text-screen-color.skp` | `box.skp` with Model Info ▸ Text ▸ Screen Text colour set to (18, 52, 86) (§10.11). |
+| `text-arrow-none.skp` | `box.skp` with Model Info ▸ Text ▸ Leader Text endpoint set to None (arrow 0; the default is Closed Arrow, 3) (§10.11). |
+| `render-aa-off.skp` | `box.skp` with Model Info ▸ Rendering ▸ "Use anti-aliased textures" cleared (§10.11). |
+| `component-fade.skp` | `box.skp` with Model Info ▸ Components ▸ "Fade rest of model" at 60 % (rendering options +69, §10.7). |
+| `component-fade-similar.skp` | `box.skp` with Model Info ▸ Components ▸ "Fade similar components" at 80 % (rendering options +77, §10.7). |
+| `component-axes.skp` | `box.skp` with Model Info ▸ Components ▸ "Show component axes" checked (rendering options +28, §10.7). |
+| `animation.skp` | `box.skp` with Model Info ▸ Animation ▸ scene transition time set to 5 seconds (`TransitionTime`, §10.5). |
+| `geo-located.skp` | `box.skp` with Model Info ▸ Geo-location ▸ Set Manual Location at latitude 41.5, longitude −100.25 (`UsesGeoReferencing`, `Latitude`, `Longitude`, §10.5). |
 | `attributes.skp` | A dynamic component — attribute containers/dictionaries and every typed value encoding. |
 | `feature-pack.skp` | Box A (one soft+smooth edge, one hidden edge, hidden top face), imported `pin-fixed-distort.skp` and `attributes.skp`, then a guide line, guide point, section plane, leader + screen text, linear dimension and placed image back to back in one root list, plus two scenes — pins every annotation body's exact extent (each is followed by the next one's record). |
 

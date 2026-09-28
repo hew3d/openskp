@@ -58,7 +58,8 @@ fn every_root_annotation_is_read() {
     assert_eq!(g.point_m[2], 0.0);
     assert_eq!(g.direction, [1.0, 0.0, 0.0], "runs along +X");
 
-    assert_eq!(m.scenes, ["Scene 1", "Scene 2"]);
+    let names: Vec<&str> = m.scenes.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Scene 1", "Scene 2"]);
     for name in ["pin-fixed-distort", "attributes", "DynamicHorizontalBlind"] {
         assert!(
             m.definitions.iter().any(|d| d.name == name),

@@ -20,6 +20,10 @@ fn corpus(name: &str) -> Vec<u8> {
 // ---- linear algebra (row layout matches openskp::Node::world) ----
 
 type M4 = [f64; 16];
+
+/// World ring → every face drawn there: (world transform, geometry run,
+/// face index, inherited material).
+type FacesByRing = HashMap<Vec<[i64; 3]>, Vec<(M4, usize, usize, u16)>>;
 const ID4: M4 = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
@@ -466,8 +470,22 @@ fn theater_2017_world_equivalence() {
         0,
         "zero desyncs"
     );
+    check_against_dae(&m);
+}
+
+/// The SketchUp 2026 save of the same model, read by the post-2017 reader,
+/// meets the SAME COLLADA oracle as the 2017 file: every check below runs
+/// unchanged against the 2026 model.
+#[test]
+fn theater_2026_world_equivalence() {
+    let m = openskp::Model::parse(&corpus("../third-party/theater-2026.skp")).unwrap();
+    assert_eq!(m.version, "{26.2.0}");
+    check_against_dae(&m);
+}
+
+fn check_against_dae(m: &openskp::Model) {
     let dae = parse_dae("../third-party/theater-2017.dae");
-    let leaves = our_leaves(&m);
+    let leaves = our_leaves(m);
 
     // -- vertex-set containment + ring coverage --
     let mut dae_raw: BTreeSet<[i64; 3]> = BTreeSet::new();
@@ -571,8 +589,6 @@ fn theater_2017_world_equivalence() {
         }
     }
     let (mut path_diff, mut merged_hole, mut unexplained) = (0, 0, 0);
-    let all_face_sets: Vec<(BTreeSet<[i64; 3]>, usize)> =
-        our_rings.iter().map(|r| (vset(r), r.len())).collect();
     for r in dae_rings.difference(&our_rings) {
         let s = vset(r);
         if our_vsets.contains(&s) {
@@ -632,7 +648,7 @@ fn theater_2017_world_equivalence() {
     // panels, etc.) whose world rings collide; keep every candidate and
     // accept if ANY matches (the dae exports each copy with its own
     // material).
-    let mut face_of: HashMap<Vec<[i64; 3]>, Vec<(M4, usize, usize, u16)>> = HashMap::new();
+    let mut face_of: FacesByRing = HashMap::new();
     for (world, ri, inherited) in &leaves {
         let mesh = &m.geometry[*ri].mesh;
         for (fi, f) in mesh.faces.iter().enumerate() {

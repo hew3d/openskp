@@ -2,8 +2,9 @@
 
 ## What this project is
 
-A **clean-room** specification and reader for the SketchUp 2017 `.skp`
-binary format (v17.3.116 and nearby), for which no public spec exists.
+A **clean-room** specification and reader for the SketchUp `.skp` format —
+the 2017 binary format (v17.3.116 and nearby) and the post-2017 ZIP
+container (SketchUp 2026) — for which no public spec exists.
 Deliverables: the format spec (`docs/SKP_FORMAT.md` + `ksy/skp.ksy`), the
 Rust SDK (`crates/openskp` + CLI + C ABI), and the evidence corpus.
 
@@ -30,7 +31,7 @@ Rust SDK (`crates/openskp` + CLI + C ABI), and the evidence corpus.
 
 ```
 corpus/2017/         authored minimal pairs + .dae ground truth (README lists purposes)
-corpus/legacy|future|third-party/   older saves, post-2017 probes, the benchmark model
+corpus/legacy|2026|third-party/     older saves, 2026 saves of 2017 models, the benchmark model
 docs/                SKP_FORMAT.md (the spec — read first), SDK.md, DEVELOPMENT.md
 ksy/                 skp.ksy — Kaitai grammar (header + record catalogue)
 crates/              openskp (core), openskp-cli, openskp-capi
@@ -54,6 +55,12 @@ scripts/verify.sh    Kaitai + reference-parser verification
   instance-painted materials inherit down the scene (spec §9).
 - Source comments cite `§4x` anchors (resolve via SKP_FORMAT.md
   Appendix B) and `Phase N` labels (resolve via DEVELOPMENT.md).
+- Post-2017 (spec §16): header string records, then a ZIP whose
+  `model.dat` is a tree of `u16 tag | u32 len | payload` records. Tags
+  are type-scoped constants (unlike 2017 class tags); descend only into
+  known containers (leaf payloads can tile as records). Persistent ids
+  survive the 2017→2026 conversion except where the 2017 file held
+  duplicates, so compare 2017/2026 pairs by content, not pid.
 
 ## Method
 
@@ -61,7 +68,9 @@ scripts/verify.sh    Kaitai + reference-parser verification
   edits; structural changes shift all later offsets — anchor on typed
   exact coordinates searched as f64 inches instead.
 - Decode new structures in `tools/contwalk.py` first (hexdumps on
-  stall), then port to `crates/openskp` (`walk2.rs` + `entity.rs`).
+  stall), then port to `crates/openskp` (`walk2.rs` + `entity.rs`). For
+  the 2026 container: `tools/skp26.py` (+ `skp26_check.py` against the
+  2017 decode), ported in `read26.rs`.
 - `tools/carchive.py` / `skpwalk.py` / `skpparse.py` are FROZEN — they
   are the differential oracle (`crates/openskp/tests/oracle.json`), not a
   place for new capability.
@@ -83,7 +92,12 @@ Every 2017-era corpus file parses zero-desync on the continuous path;
 space; the third-party benchmark matches its export exactly (vertices,
 face rings, materials, all textured faces' UVs); the spec's class
 catalogue is machine-checked against `CVersionMap`. The legacy path
-serves v2013–16 only. Remaining unknowns: `docs/SKP_FORMAT.md` §15.
+serves v2013–16 only. Every `corpus/2026` file (and theater-2026) reads
+equivalent to its 2017 original (geometry, scene, materials, layers,
+UVs, scenes, guides, document settings; `images`/`attributes` differ by
+design), and
+theater-2026 meets the theater
+COLLADA oracle. Remaining unknowns: `docs/SKP_FORMAT.md` §15, §16.9.
 
 ## Commands
 

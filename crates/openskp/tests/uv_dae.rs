@@ -50,8 +50,11 @@ fn floats(s: &str) -> Vec<f64> {
         .collect()
 }
 
-/// Textured polylist faces: `(corner positions [m], corner UVs)`.
-fn dae_textured(name: &str) -> Vec<(Vec<[f64; 3]>, Vec<[f64; 2]>)> {
+/// A textured face: `(corner positions [m], corner UVs)`.
+type TexturedFace = (Vec<[f64; 3]>, Vec<[f64; 2]>);
+
+/// Textured polylist faces.
+fn dae_textured(name: &str) -> Vec<TexturedFace> {
     let doc = String::from_utf8(corpus(name)).unwrap();
     let unit: f64 = attr(
         &doc[doc.find("<unit").unwrap()..doc.find("<unit").unwrap() + 80],

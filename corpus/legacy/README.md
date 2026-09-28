@@ -1,7 +1,7 @@
 # corpus/legacy — SketchUp 2013–2016 saves
 
 The same 1 m box saved by four earlier SketchUp releases. These share the
-2017 outer container (header string records, version string, format GUID,
+2017 outer container (header string records, version string, model GUID,
 MFC `CArchive` object stream) but their class schemas and body layouts
 differ, so they are **not** part of the zero-desync 2017 corpus.
 
@@ -14,7 +14,8 @@ differ, so they are **not** part of the zero-desync 2017 corpus.
 
 What they pin down:
 
-- Header identification (`version` + format GUID) works across 2013–2017.
+- Header identification (`version` + model GUID) works across 2013–2017;
+  all four boxes carry `box.skp`'s model GUID (one model, five saves).
 - The reader's bar for pre-2017 bodies is *parse without panic, degrade
   loudly* — these files exercise the legacy fallback path and its
   degradation diagnostics.

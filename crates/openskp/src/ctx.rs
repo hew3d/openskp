@@ -1,10 +1,9 @@
 //! Version/container context (Phase 0.1; see `docs/DEVELOPMENT.md`).
 //!
-//! `detect_container` is the seam where any future outer-container change
-//! lands: the post-2017 releases abandoned the 2013–2017 layout (evidence:
-//! `corpus/future/box-v2026.skp` — the doc-name string-record magic at the
-//! header's tail is absent), so an arbitrary file must be classified before
-//! the CArchive walk is attempted at all.
+//! `detect_container` is the seam where outer-container changes land: the
+//! post-2017 releases abandoned the 2013–2017 layout for a ZIP archive
+//! (evidence: `corpus/2026/` — a ZIP local header follows the two string
+//! records), so an arbitrary file is classified before either reader runs.
 //!
 //! `Ctx` carries the file's own version string and its `CVersionMap`
 //! class→schema table; it rides on every `CArchive` (see `carchive.rs`) so
@@ -20,9 +19,13 @@ use crate::{header, inventory};
 pub enum Container {
     /// SketchUp ~2013–2017: fixed UTF-16 string-record header, then an
     /// uncompressed MFC `CArchive` object stream opening with the
-    /// `CVersionMap` new-class record. The only container this crate reads.
+    /// `CVersionMap` new-class record.
     Carchive2017,
-    /// Anything else — including the post-2017 layout.
+    /// Post-2017 (observed: SketchUp 2026, `{26.x}`): the same two leading
+    /// string records, then a ZIP archive holding `model.dat` (a tagged
+    /// record tree), material XML, and images (SKP_FORMAT §16).
+    Zip,
+    /// Anything else.
     Unknown,
 }
 
@@ -33,10 +36,25 @@ pub enum Container {
 pub fn detect_container(d: &[u8]) -> Container {
     match header::object_stream_start(d) {
         Some(start) if start + 2 <= d.len() && d[start..start + 2] == [0xFF, 0xFF] => {
-            Container::Carchive2017
+            return Container::Carchive2017
         }
-        _ => Container::Unknown,
+        _ => {}
     }
+    match zip_start(d) {
+        Some(_) => Container::Zip,
+        None => Container::Unknown,
+    }
+}
+
+/// Where the post-2017 container's ZIP archive starts: the first ZIP local
+/// file header within a few bytes after the string records (13 in every
+/// corpus/2026 file).
+pub(crate) fn zip_start(d: &[u8]) -> Option<usize> {
+    let end = header::strings_end(d)?;
+    d.get(end..d.len().min(end + 64))?
+        .windows(4)
+        .position(|w| w == b"PK\x03\x04")
+        .map(|i| end + i)
 }
 
 /// Parse context threaded through the walk (Phase 0.1).
@@ -97,11 +115,8 @@ mod tests {
     }
 
     #[test]
-    fn post_2017_container_is_unknown() {
-        assert_eq!(
-            detect_container(&corpus("../future/box-v2026.skp")),
-            Container::Unknown
-        );
+    fn post_2017_container_is_zip() {
+        assert_eq!(detect_container(&corpus("../2026/box.skp")), Container::Zip);
     }
 
     #[test]
@@ -121,6 +136,6 @@ mod tests {
 
     #[test]
     fn ctx_of_post_2017_is_none() {
-        assert!(Ctx::of(&corpus("../future/box-v2026.skp")).is_none());
+        assert!(Ctx::of(&corpus("../2026/box.skp")).is_none());
     }
 }

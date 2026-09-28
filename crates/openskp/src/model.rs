@@ -3,6 +3,11 @@
 //!
 //! Port of `parse_model` in `tools/skpwalk.py`.
 
+use crate::ctx::Container;
+use crate::settings::{
+    Animation, Axes, Camera, Dimension, DimensionDefaults, Font, RenderingOptions, Scene,
+    ShadowInfo, Style, Text, TextDefaults, Units, Watermark,
+};
 use crate::{
     extract, geometry_runs_with_diagnostics, header, AttrValue, Attribute, Definition, Diagnostic,
     GeometryRun, Guide, Image, Instance, Layer, Material, PlacedInstance, RunFilterReason,
@@ -13,16 +18,44 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Model {
     pub version: String,
-    pub format_guid: String,
+    /// Which file layout the model came from.
+    pub container: Container,
+    /// Per-model identifier from the 2013–2017 header (SKP_FORMAT §3): kept
+    /// across re-saves of the same model, distinct between models.
+    pub model_guid: Option<String>,
     pub definitions: Vec<Definition>,
     pub instances: Vec<Instance>,
     pub geometry: Vec<GeometryRun>,
     pub materials: Vec<Material>,
     pub layers: Vec<Layer>,
-    pub scenes: Vec<String>,
+    pub scenes: Vec<Scene>,
     pub guides: Vec<Guide>,
     pub attributes: Vec<Attribute>,
     pub images: Vec<Image>,
+    /// The current view.
+    pub camera: Option<Camera>,
+    /// The document's display settings.
+    pub rendering: Option<RenderingOptions>,
+    pub shadows: Option<ShadowInfo>,
+    pub units: Units,
+    pub styles: Vec<Style>,
+    /// Index into `styles` of the active style.
+    pub active_style: Option<usize>,
+    /// The watermarks of the current view (the active style's settings as
+    /// last edited, saved or not).
+    pub watermarks: Vec<Watermark>,
+    pub fonts: Vec<Font>,
+    pub texts: Vec<Text>,
+    pub dimensions: Vec<Dimension>,
+    /// The model axes.
+    pub axes: Option<Axes>,
+    pub text_defaults: Option<TextDefaults>,
+    pub dimension_defaults: Option<DimensionDefaults>,
+    /// Use anti-aliased textures (Model Info ▸ Rendering).
+    pub anti_aliased_textures: Option<bool>,
+    pub animation: Animation,
+    /// The model has a geographic location set.
+    pub geo_located: bool,
     /// Definition linkage (Phase 1.2/3.3): `(declared def map index,
     /// index into definitions)`, sorted. The def-refs carried by instances
     /// (top-level and in-list) resolve through this.
@@ -135,15 +168,23 @@ impl Model {
     /// abandoned attempt is recorded as a `ContinuousFallback` diagnostic —
     /// which path ran is never silent.
     pub fn parse(d: &[u8]) -> Result<Model, Error> {
-        // Container gate (Phase 0.1): refuse cleanly instead of walking a
-        // layout we don't understand (e.g. post-2017 files — see
-        // corpus/future/). `header_info` still identifies such files.
-        if crate::ctx::detect_container(d) != crate::ctx::Container::Carchive2017 {
-            return Err(Error(
-                "unsupported .skp container: not the 2013–2017 MFC CArchive layout \
-                 (a post-2017 SketchUp file? re-save as SketchUp 2017 to read it here)"
-                    .into(),
-            ));
+        // Container gate (Phase 0.1): the post-2017 ZIP container has its
+        // own reader; anything unrecognized is refused cleanly instead of
+        // walked. `header_info` still identifies such files.
+        match crate::ctx::detect_container(d) {
+            crate::ctx::Container::Carchive2017 => {}
+            crate::ctx::Container::Zip => {
+                let (version, _) =
+                    crate::header_info(d).ok_or_else(|| Error("malformed .skp header".into()))?;
+                return crate::read26::parse(d, version);
+            }
+            crate::ctx::Container::Unknown => {
+                return Err(Error(
+                    "unsupported .skp container: neither the 2013–2017 MFC CArchive \
+                     layout nor the post-2017 ZIP layout"
+                        .into(),
+                ))
+            }
         }
         let hdr = header::parse_header(d).ok_or_else(|| Error("malformed .skp header".into()))?;
         match crate::walk2::walk(d) {
@@ -227,18 +268,40 @@ impl Model {
                 layer_links.extend(lrefs.iter().enumerate().map(|(i, &s)| (s, first + i)));
             }
         }
+        let attributes = extract::attributes(d);
+        let units = Units::from_attributes(&attributes);
+        let animation = Animation::from_attributes(&attributes);
+        let geo_located = geo_located(&attributes);
+        let s17 = crate::settings17::read(d, None);
         Ok(Model {
+            container: Container::Carchive2017,
             version: hdr.version,
-            format_guid: hdr.format_guid,
+            model_guid: Some(hdr.model_guid),
             definitions,
             instances,
             geometry,
             materials,
             layers,
-            scenes: extract::scenes(d),
+            scenes: s17.scenes,
             guides: extract::guides(d),
-            attributes: extract::attributes(d),
+            attributes,
             images: extract::images(d),
+            camera: s17.camera,
+            rendering: s17.rendering,
+            shadows: s17.shadows,
+            units,
+            styles: s17.styles,
+            active_style: s17.active_style,
+            watermarks: s17.watermarks,
+            fonts: s17.fonts,
+            texts: s17.texts,
+            dimensions: s17.dimensions,
+            axes: s17.axes,
+            text_defaults: s17.text_defaults,
+            dimension_defaults: s17.dimension_defaults,
+            anti_aliased_textures: s17.anti_aliased_textures,
+            animation,
+            geo_located,
             definition_links,
             layer_links,
             material_links,
@@ -310,7 +373,14 @@ impl Model {
         let mut definitions = Vec::with_capacity(cw.defs.len());
         let mut definition_links: Vec<(u32, usize)> = Vec::new();
         for ds in &cw.defs {
-            let Slot::Object(Entity::ComponentDef { name, guid, .. }) = &map[ds.slot] else {
+            let Slot::Object(Entity::ComponentDef {
+                name,
+                guid,
+                behaviour,
+                timestamp,
+                ..
+            }) = &map[ds.slot]
+            else {
                 return None;
             };
             if let Ok(slot) = u32::try_from(ds.slot) {
@@ -319,6 +389,8 @@ impl Model {
             definitions.push(Definition {
                 name: name.clone(),
                 guid: guid.clone(),
+                behaviour: behaviour.clone(),
+                timestamp: *timestamp,
                 map_index: Some(ds.slot),
             });
         }
@@ -492,18 +564,40 @@ impl Model {
                 }),
         );
 
+        let attributes = extract::attributes(d);
+        let units = Units::from_attributes(&attributes);
+        let animation = Animation::from_attributes(&attributes);
+        let geo_located = geo_located(&attributes);
+        let s17 = crate::settings17::read(d, Some(map));
         Some(Model {
+            container: Container::Carchive2017,
             version: hdr.version.clone(),
-            format_guid: hdr.format_guid.clone(),
+            model_guid: Some(hdr.model_guid.clone()),
             definitions,
             instances,
             geometry,
             materials,
             layers,
-            scenes: extract::scenes(d),
+            scenes: s17.scenes,
             guides: extract::guides(d),
-            attributes: extract::attributes(d),
+            attributes,
             images: extract::images(d),
+            camera: s17.camera,
+            rendering: s17.rendering,
+            shadows: s17.shadows,
+            units,
+            styles: s17.styles,
+            active_style: s17.active_style,
+            watermarks: s17.watermarks,
+            fonts: s17.fonts,
+            texts: s17.texts,
+            dimensions: s17.dimensions,
+            axes: s17.axes,
+            text_defaults: s17.text_defaults,
+            dimension_defaults: s17.dimension_defaults,
+            anti_aliased_textures: s17.anti_aliased_textures,
+            animation,
+            geo_located,
             definition_links,
             layer_links,
             material_links,
@@ -643,13 +737,28 @@ impl Model {
         let mut j = Json::new();
         j.begin_obj();
         j.m_str("version", &self.version);
-        j.m_str("format_guid", &self.format_guid);
+        j.m_str(
+            "container",
+            match self.container {
+                Container::Carchive2017 => "carchive2017",
+                Container::Zip => "zip",
+                Container::Unknown => "unknown",
+            },
+        );
+        j.key("model_guid");
+        match &self.model_guid {
+            Some(g) => j.raw_str(g),
+            None => j.raw_null(),
+        }
 
         j.key("definitions");
         j.arr(&self.definitions, |j, def| {
             j.begin_obj();
             j.m_str("name", &def.name);
             j.m_str("guid", &def.guid);
+            j.m_usize("timestamp", def.timestamp as usize);
+            j.key("behaviour");
+            behaviour_json(j, &def.behaviour);
             j.end_obj();
         });
 
@@ -792,7 +901,7 @@ impl Model {
         });
 
         j.key("scenes");
-        j.arr(&self.scenes, |j, s| j.raw_str(s));
+        j.arr(&self.scenes, scene_json);
 
         j.key("guides");
         j.arr(&self.guides, |j, g: &Guide| {
@@ -837,6 +946,78 @@ impl Model {
             j.m_usize("bytes", im.bytes);
             j.end_obj();
         });
+
+        j.key("camera");
+        opt(&mut j, self.camera.as_ref(), camera_json);
+        j.key("rendering");
+        opt(&mut j, self.rendering.as_ref(), rendering_json);
+        j.key("shadows");
+        opt(&mut j, self.shadows.as_ref(), shadow_json);
+        j.key("units");
+        units_json(&mut j, &self.units);
+        j.key("styles");
+        j.arr(&self.styles, style_json);
+        j.key("active_style");
+        match self.active_style {
+            Some(i) => j.raw_usize(i),
+            None => j.raw_null(),
+        }
+        j.key("watermarks");
+        j.arr(&self.watermarks, watermark_json);
+        j.key("fonts");
+        j.arr(&self.fonts, |j, f| {
+            j.begin_obj();
+            j.m_str("family", &f.family);
+            j.m_bool("bold", f.bold);
+            j.m_bool("italic", f.italic);
+            j.m_usize("size_pt", f.size_pt as usize);
+            j.end_obj();
+        });
+        j.key("texts");
+        j.arr(&self.texts, text_json);
+        j.key("dimensions");
+        j.arr(&self.dimensions, dimension_json);
+        j.key("axes");
+        opt(&mut j, self.axes.as_ref(), axes_json);
+        j.key("text_defaults");
+        opt(&mut j, self.text_defaults.as_ref(), |j, t| {
+            j.begin_obj();
+            j.key("font");
+            opt_index(j, t.font);
+            j.key("screen_font");
+            opt_index(j, t.screen_font);
+            j.m_usize("arrow", t.arrow as usize);
+            j.key("leader_text_color");
+            j.u8_arr(&t.leader_text_color);
+            j.key("screen_text_color");
+            j.u8_arr(&t.screen_text_color);
+            j.end_obj();
+        });
+        j.key("dimension_defaults");
+        opt(&mut j, self.dimension_defaults.as_ref(), |j, d| {
+            j.begin_obj();
+            j.key("font");
+            opt_index(j, d.font);
+            j.m_bool("aligned", d.aligned);
+            j.m_usize("arrow", d.arrow as usize);
+            j.m_usize("text_position", d.text_position as usize);
+            j.key("color");
+            j.u8_arr(&d.color);
+            j.end_obj();
+        });
+        j.key("anti_aliased_textures");
+        match self.anti_aliased_textures {
+            Some(b) => j.raw_bool(b),
+            None => j.raw_null(),
+        }
+        j.key("animation");
+        j.begin_obj();
+        j.m_bool("transitions", self.animation.transitions);
+        j.m_f64("transition_s", self.animation.transition_s);
+        j.m_f64("delay_s", self.animation.delay_s);
+        j.m_bool("loop_slideshow", self.animation.loop_slideshow);
+        j.end_obj();
+        j.m_bool("geo_located", self.geo_located);
 
         // Only DESYNC diagnostics reach the JSON, and only when present: the
         // frozen Python-reference oracle predates diagnostics, and CLEAN
@@ -1186,9 +1367,9 @@ fn continuous_material_links(
             // Same shared-texture resolution under the arithmetic model:
             // a material's own dib occupies the slot right after it.
             let unresolved = resolve_shared_bytes(materials, shared_refs, |dib_slot| {
-                links
-                    .iter()
-                    .find_map(|&(s, i)| (own_dib[i] && s as usize + 1 == dib_slot as usize).then_some(i))
+                links.iter().find_map(|&(s, i)| {
+                    (own_dib[i] && s as usize + 1 == dib_slot as usize).then_some(i)
+                })
             });
             (links, unresolved_shared_texture_diags(unresolved))
         }
@@ -1288,6 +1469,243 @@ fn cmaterial_declared_count(d: &[u8]) -> Option<usize> {
     }
     let c = u32::from_le_bytes([d[i - 8], d[i - 7], d[i - 6], d[i - 5]]) as usize;
     (c <= 100_000).then_some(c)
+}
+
+fn geo_located(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.key == "UsesGeoReferencing"
+            && matches!(a.value, AttrValue::Bool(true) | AttrValue::Int(1..))
+    })
+}
+
+fn opt_index(j: &mut Json, i: Option<usize>) {
+    match i {
+        Some(i) => j.raw_usize(i),
+        None => j.raw_null(),
+    }
+}
+
+fn axes_json(j: &mut Json, a: &Axes) {
+    j.begin_obj();
+    j.key("origin_m");
+    j.f64_arr(&a.origin_m);
+    j.key("x");
+    j.f64_arr(&a.x);
+    j.key("y");
+    j.f64_arr(&a.y);
+    j.key("z");
+    j.f64_arr(&a.z);
+    j.end_obj();
+}
+
+fn opt<T>(j: &mut Json, v: Option<&T>, f: impl Fn(&mut Json, &T)) {
+    match v {
+        Some(x) => f(j, x),
+        None => j.raw_null(),
+    }
+}
+
+fn camera_json(j: &mut Json, c: &Camera) {
+    j.begin_obj();
+    j.key("eye_m");
+    j.f64_arr(&c.eye_m);
+    j.key("target_m");
+    j.f64_arr(&c.target_m);
+    j.key("up");
+    j.f64_arr(&c.up);
+    j.m_bool("perspective", c.perspective);
+    j.m_f64("fov_deg", c.fov_deg);
+    j.m_f64("parallel_height_m", c.parallel_height_m);
+    j.m_bool("two_point_perspective", c.two_point_perspective);
+    j.m_str("description", &c.description);
+    j.end_obj();
+}
+
+fn rendering_json(j: &mut Json, ro: &RenderingOptions) {
+    use crate::settings::RoValue;
+    j.begin_obj();
+    for (name, v) in ro.values() {
+        match v {
+            Some(RoValue::Bool(b)) => j.m_bool(name, b),
+            Some(RoValue::U32(x)) => j.m_usize(name, x as usize),
+            Some(RoValue::F64(x)) => j.m_f64(name, x),
+            Some(RoValue::Rgba(c)) => {
+                j.key(name);
+                j.u8_arr(&c);
+            }
+            None => {
+                j.key(name);
+                j.raw_null();
+            }
+        }
+    }
+    j.end_obj();
+}
+
+fn shadow_json(j: &mut Json, s: &ShadowInfo) {
+    j.begin_obj();
+    j.m_usize("time", s.time as usize);
+    j.m_str("city", &s.city);
+    j.m_str("country", &s.country);
+    j.m_f64("longitude", s.longitude);
+    j.m_f64("latitude", s.latitude);
+    j.m_f64("tz_offset_h", s.tz_offset_h);
+    j.m_bool("displayed", s.displayed);
+    j.m_bool("on_faces", s.on_faces);
+    j.m_bool("on_ground", s.on_ground);
+    j.m_bool("from_edges", s.from_edges);
+    j.m_usize("light", s.light as usize);
+    j.m_usize("dark", s.dark as usize);
+    j.m_bool("use_sun_for_shading", s.use_sun_for_shading);
+    j.end_obj();
+}
+
+fn units_json(j: &mut Json, u: &Units) {
+    j.begin_obj();
+    j.m_usize("length_format", u.length_format as usize);
+    j.m_usize("length_unit", u.length_unit as usize);
+    j.m_usize("length_precision", u.length_precision as usize);
+    j.m_usize("angle_precision", u.angle_precision as usize);
+    j.m_bool("length_snap", u.length_snap);
+    j.m_f64("length_snap_length", u.length_snap_length);
+    j.m_bool("angle_snap", u.angle_snap);
+    j.m_f64("snap_angle", u.snap_angle);
+    j.m_bool("suppress_units_display", u.suppress_units_display);
+    j.m_bool("force_inch_display", u.force_inch_display);
+    for (k, v) in [
+        ("area_unit", u.area_unit),
+        ("volume_unit", u.volume_unit),
+        ("area_precision", u.area_precision),
+        ("volume_precision", u.volume_precision),
+    ] {
+        j.key(k);
+        match v {
+            Some(x) => j.raw_usize(x as usize),
+            None => j.raw_null(),
+        }
+    }
+    j.end_obj();
+}
+
+fn style_json(j: &mut Json, s: &Style) {
+    j.begin_obj();
+    j.m_str("name", &s.name);
+    j.m_str("description", &s.description);
+    j.m_str("guid", &s.guid);
+    j.key("settings");
+    rendering_json(j, &s.settings);
+    j.key("watermarks");
+    j.arr(&s.watermarks, watermark_json);
+    j.end_obj();
+}
+
+fn watermark_json(j: &mut Json, w: &Watermark) {
+    j.begin_obj();
+    j.m_str("name", &w.name);
+    j.m_str("source_file", &w.source_file);
+    j.m_bool("background", w.background);
+    j.m_bool("tiled", w.tiled);
+    j.m_bool("stretched", w.stretched);
+    j.m_bool("keep_aspect_ratio", w.keep_aspect_ratio);
+    j.m_usize("position", w.position as usize);
+    j.m_bool("mask", w.mask);
+    j.m_f64("blend", w.blend);
+    j.m_f64("scale", w.scale);
+    j.end_obj();
+}
+
+fn scene_json(j: &mut Json, s: &Scene) {
+    j.begin_obj();
+    j.m_str("name", &s.name);
+    j.m_str("description", &s.description);
+    j.m_usize("saved", s.saved.0 as usize);
+    j.key("camera");
+    opt(j, s.camera.as_ref(), camera_json);
+    j.key("rendering");
+    opt(j, s.rendering.as_ref(), rendering_json);
+    j.key("style");
+    match &s.style {
+        Some(n) => j.raw_str(n),
+        None => j.raw_null(),
+    }
+    j.key("shadows");
+    opt(j, s.shadows.as_ref(), shadow_json);
+    j.key("axes");
+    opt(j, s.axes.as_ref(), axes_json);
+    j.key("hidden_entities");
+    j.arr(&s.hidden_entities, |j, id| j.raw_usize(*id as usize));
+    j.key("active_section_planes");
+    j.arr(&s.active_section_planes, |j, id| j.raw_usize(*id as usize));
+    j.m_bool("in_animation", s.in_animation);
+    j.end_obj();
+}
+
+fn anchor_json(j: &mut Json, a: &crate::settings::Anchor) {
+    j.begin_obj();
+    j.m_usize("kind", a.kind as usize);
+    j.key("point_m");
+    j.f64_arr(&a.point_m);
+    j.end_obj();
+}
+
+fn text_json(j: &mut Json, t: &Text) {
+    j.begin_obj();
+    j.m_usize("pid", t.pid as usize);
+    j.m_str("content", &t.content);
+    j.key("screen_position");
+    j.f64_arr(&t.screen_position);
+    j.key("anchor");
+    anchor_json(j, &t.anchor);
+    j.key("leader_offset");
+    j.f64_arr(&t.leader_offset);
+    j.m_str(
+        "leader",
+        match t.leader {
+            crate::settings::Leader::None => "none",
+            crate::settings::Leader::ViewBased => "view_based",
+            crate::settings::Leader::Pushpin => "pushpin",
+        },
+    );
+    j.m_usize("arrow", t.arrow as usize);
+    j.key("font");
+    match t.font {
+        Some(i) => j.raw_usize(i),
+        None => j.raw_null(),
+    }
+    j.end_obj();
+}
+
+fn dimension_json(j: &mut Json, d: &Dimension) {
+    j.begin_obj();
+    j.m_usize("pid", d.pid as usize);
+    j.m_str("text_override", &d.text_override);
+    j.key("start");
+    anchor_json(j, &d.start);
+    j.key("end");
+    anchor_json(j, &d.end);
+    j.key("normal");
+    j.f64_arr(&d.normal);
+    j.key("x_axis");
+    j.f64_arr(&d.x_axis);
+    j.m_f64("offset_m", d.offset_m);
+    j.m_usize("text_position", d.text_position as usize);
+    j.m_bool("aligned", d.aligned);
+    j.key("font");
+    match d.font {
+        Some(i) => j.raw_usize(i),
+        None => j.raw_null(),
+    }
+    j.end_obj();
+}
+
+fn behaviour_json(j: &mut Json, b: &crate::settings::Behaviour) {
+    j.begin_obj();
+    j.m_bool("glues_to_surface", b.glues_to_surface);
+    j.m_usize("glue_plane", b.glue_plane as usize);
+    j.m_bool("cuts_opening", b.cuts_opening);
+    j.m_bool("always_faces_camera", b.always_faces_camera);
+    j.m_bool("shadows_face_sun", b.shadows_face_sun);
+    j.end_obj();
 }
 
 /// A tiny, dependency-free JSON writer. Containers push a "has content" flag;
@@ -1490,7 +1908,10 @@ mod tests {
         let shared_refs = vec![(0usize, 7u16)];
         let (links, diags) =
             continuous_material_links(&[], &mut materials, &shared_refs, 10, &geometry);
-        assert!(links.is_empty(), "no material exists to link the observed matref to");
+        assert!(
+            links.is_empty(),
+            "no material exists to link the observed matref to"
+        );
         assert!(
             diags
                 .iter()
@@ -1498,9 +1919,9 @@ mod tests {
             "must record which fallback tier ran: {diags:?}"
         );
         assert!(
-            diags.iter().any(
-                |d| matches!(d, Diagnostic::UnresolvedSharedTexture { count } if *count == 1)
-            ),
+            diags
+                .iter()
+                .any(|d| matches!(d, Diagnostic::UnresolvedSharedTexture { count } if *count == 1)),
             "the shared-texture loss must be flagged, not silent: {diags:?}"
         );
     }
@@ -1522,9 +1943,9 @@ mod tests {
             "the shared-texture material must still be extracted by name"
         );
         assert!(
-            m.diagnostics.iter().any(
-                |d| matches!(d, Diagnostic::UnresolvedSharedTexture { count } if *count > 0)
-            ),
+            m.diagnostics
+                .iter()
+                .any(|d| matches!(d, Diagnostic::UnresolvedSharedTexture { count } if *count > 0)),
             "the legacy path's shared-texture loss must be flagged, not silent: {:?}",
             m.diagnostics
         );
@@ -1575,7 +1996,11 @@ mod tests {
         let shared_refs = vec![(0usize, 99u16)];
         let (links, diags) =
             continuous_material_links(&[], &mut materials, &shared_refs, 1, &geometry);
-        assert_eq!(links, vec![(1u16, 0usize)], "the arithmetic tier must still succeed");
+        assert_eq!(
+            links,
+            vec![(1u16, 0usize)],
+            "the arithmetic tier must still succeed"
+        );
         assert!(
             diags.iter().any(
                 |d| matches!(d, Diagnostic::UnresolvedSharedTexture { count } if *count == 1)

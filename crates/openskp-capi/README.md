@@ -1,7 +1,8 @@
 # openskp-capi
 
 C ABI for [openskp](https://crates.io/crates/openskp), the clean-room
-reader for the SketchUp 2017 `.skp` binary format. Builds `libopenskp`
+reader for SketchUp `.skp` files (the 2017 format and the SketchUp 2026
+container). Builds `libopenskp`
 as a static and shared library with a plain-C header
 ([`include/openskp.h`](https://github.com/hew3d/openskp/blob/main/crates/openskp-capi/include/openskp.h)),
 exposing header identification, model parsing, and JSON output — any

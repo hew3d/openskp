@@ -1,6 +1,6 @@
 [package]
 name = "openskp"
-description = "Clean-room reader for the SketchUp .skp binary format (SketchUp 2017)"
+description = "Clean-room reader for the SketchUp .skp format (SketchUp 2017 and 2026)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,8 +11,13 @@ keywords = ["sketchup", "skp", "cad", "parser"]
 categories = ["parser-implementations"]
 exclude = ["tests/", "examples/"]
 
-# The core library has ZERO runtime dependencies by design, so it drops
-# cleanly into any build. Test-only deps live under dev-dependencies.
+# The core library keeps its runtime dependencies minimal so it drops
+# cleanly into any build: only a pure-Rust DEFLATE decoder, needed for the
+# post-2017 container's ZIP archive. Test-only deps live under
+# dev-dependencies.
+
+[dependencies]
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 
 [dev-dependencies]
 serde_json = "1"

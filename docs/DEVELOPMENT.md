@@ -119,10 +119,11 @@ Roughly in order of likely value:
   (material color is known to round-trip byte-exactly), then full
   `CArchive` authoring with save-noise reproduction (doc id, re-rendered
   thumbnails). A distinct, larger effort than reading.
-- **Post-2017 containers.** Newer releases wrap a ZIP archive after the
-  header string records (`corpus/future/`). Reading them is a new
-  container backend behind the `detect_container` seam; the inner model
-  serialization is unexplored.
+- **Post-2017 coverage.** SketchUp 2026 files read through
+  `read26.rs` (`docs/SKP_FORMAT.md` §16). Releases 2018–2025 are
+  unobserved; text/dimension bodies, scene cameras, and styles are not
+  yet decoded (§16.9). New 2026 evidence is cheapest as web-app
+  conversions of existing 2017 corpus files (`corpus/2026/README.md`).
 - **2013–2016 body decode.** The container parses today; class bodies
   differ per release. The `(class, schema range)` registry is the
   intended landing zone; an evidence corpus per release would be needed.

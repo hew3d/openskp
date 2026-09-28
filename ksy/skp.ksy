@@ -28,7 +28,7 @@ doc: |
   use the MFC big-tag escape (0x7FFF + u32); string records escalate at 255
   chars (see str_rec); the §4h decl field is u2 with 0x7FFF→u4 escalation.
 
-  WHAT THIS SPEC PARSES: the fixed header (string records, format GUID, doc
+  WHAT THIS SPEC PARSES: the fixed header (string records, model GUID, doc
   id) and the first class-definition record, then exposes the remainder raw.
   The body-record TYPES below formally document every byte layout decoded to
   date — the §4s entity preamble, CVertex/CEdge/CFace/CLoop/CEdgeUse, the
@@ -51,9 +51,9 @@ seq:
   - id: version
     type: str_rec
     doc: 'e.g. "{17.3.116}"'
-  - id: format_guid
+  - id: model_guid
     size: 16
-    doc: stable per format/version (not per-document)
+    doc: per model; kept across re-saves of the same model
   - id: doc_name
     type: str_rec
     doc: usually empty
@@ -348,9 +348,9 @@ types:
         type: u1
   clayer_body:
     doc: |
-      CLayer schema 2 (§4s): after the preamble — display name, hidden
-      flag, internal "Layer_<name>" string, u2, display RGBA, string,
-      21-byte tail (holds an f64; 0.0/0.5 observed).
+      CLayer schema 2 (SKP_FORMAT §8.3): after the preamble — display name,
+      hidden flag, internal "Layer_<name>" string, then the solid-material
+      body of the layer colour (§8.1) and a trailing u4.
     seq:
       - id: name
         type: str_rec
@@ -360,25 +360,64 @@ types:
         type: str_rec
       - id: w16
         type: u2
+        doc: 00 01 in every observed layer
       - id: color
         type: rgba
       - id: s2
         type: str_rec
+        doc: empty in every observed layer
+      - id: material_type
+        type: u4
+        doc: 0 (solid)
+      - id: colorize_type
+        type: u4
+      - id: opacity
+        type: f8
+        doc: colour opacity (0.5 or 0.0 observed)
+      - id: use_opacity
+        type: u1
       - id: tail
-        size: 21
+        type: u4
+        doc: 0 in every observed layer (the post-2017 0x3c90)
   ccamera_body:
     doc: |
-      CCamera schema 5 (§4s): NO preamble — 137B raw (f64 eye/target/up…,
-      fields TBD) + u2 + description string + 33B tail.
+      CCamera schema 5 (SKP_FORMAT §10.6): NO preamble — 137-byte body,
+      u2 (1), description string, 33-byte tail.
     seq:
-      - id: head
-        size: 137
+      - id: eye
+        type: vec3_inches
+      - id: target
+        type: vec3_inches
+      - id: up
+        type: vec3_inches
+      - id: f72
+        type: f8
+        doc: 1.0 in every observed camera
+      - id: f80
+        type: f8
+        doc: 1000.0 in every observed camera
+      - id: perspective
+        type: u1
+      - id: fov_deg
+        type: f8
+      - id: parallel_height
+        type: f8
+      - id: reserved
+        size: 32
       - id: w
         type: u2
       - id: description
         type: str_rec
-      - id: tail
-        size: 33
+      - id: tail_f0
+        type: f8
+      - id: two_point
+        type: u1
+      - id: tail_f9
+        type: f8
+      - id: tail_f17
+        type: f8
+      - id: tail_f25
+        type: f8
   cdib:
     doc: |
       Embedded raster (schema 3) = u4 format (1=JPEG, 4=PNG) + u4 length +
@@ -392,28 +431,38 @@ types:
       - id: image
         size: length
   material_solid:
-    doc: 'solid CMaterial: name, 2 bytes, RGBA, texture-path (empty)'
+    doc: solid CMaterial (SKP_FORMAT §8.1)
     seq:
       - id: name
         type: str_rec
-      - id: gap
-        size: 2
+      - id: no_texture
+        type: u2
+        doc: 0
       - id: color
         type: rgba
       - id: texture_path
         type: str_rec
+        doc: empty in every observed file
+      - id: material_type
+        type: u4
+        doc: 0 (solid)
+      - id: colorize_type
+        type: u4
+      - id: opacity
+        type: f8
+        doc: applies only when use_opacity is set
+      - id: use_opacity
+        type: u1
   material_textured:
     doc: |
-      Textured CMaterial, inline-image form: name + has-texture u4(1) +
-      the CDib class tag + inline CDib. A JPEG (format 1) payload is
-      followed by a u4 (70/99 observed, TBD — §4v); a PNG (format 4)
-      payload is not. Then the applied size (2 f64 inches — the §4v UV
-      denominator), the source filename, and the average RGBA (what .dae
-      exports emit as the material's diffuse), u1, second RGBA.
+      Textured CMaterial (SKP_FORMAT §8.1), inline-image form: name +
+      has-texture u4(1) + the CDib class tag + inline CDib. A JPEG
+      (format 1) payload is followed by its u4 quality; a PNG (format 4)
+      payload is not.
 
       SHARED-image form (§4s addendum 2): has-texture u4(1) + a u2
-      OBJECT BACK-REF to an earlier material's CDib + f64 w/h + filename
-      + average RGBA (house.skp's "[Wood Floor Light]1").
+      OBJECT BACK-REF to an earlier material's CDib, then the same fields
+      from applied_width_in on (house.skp's "[Wood Floor Light]1").
     seq:
       - id: name
         type: str_rec
@@ -424,24 +473,36 @@ types:
         doc: class-ref to the CDib class slot
       - id: dib
         type: cdib
-      - id: jpeg_quirk
+      - id: jpeg_quality
         type: u4
         if: dib.format == 1
-        doc: 70/99 observed; TBD (quality?)
+        doc: the post-2017 0x32cd
       - id: applied_width_in
         type: f8
       - id: applied_height_in
         type: f8
       - id: filename
         type: str_rec
-      - id: avg_color
+      - id: color
         type: rgba
-        doc: the .dae diffuse for this material
+        doc: the material colour (the .dae diffuse)
       - id: sep
         type: u1
-      - id: avg_color2
+      - id: texture_avg_color
         type: rgba
-        doc: near-duplicate of avg_color, ±1/level; TBD
+        doc: the texture's average colour
+      - id: s2
+        type: str_rec
+        doc: empty in every observed file
+      - id: material_type
+        type: u4
+        doc: 1 (textured)
+      - id: colorize_type
+        type: u4
+      - id: opacity
+        type: f8
+      - id: use_opacity
+        type: u1
   component_instance_body:
     doc: |
       CComponentInstance schema 5 / CGroup schema 1 — IDENTICAL layouts

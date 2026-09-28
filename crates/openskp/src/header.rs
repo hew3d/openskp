@@ -1,11 +1,11 @@
-//! `.skp` fixed header: version string + stable format GUID, and the offset at
+//! `.skp` fixed header: version string + per-model GUID, and the offset at
 //! which the MFC object stream begins.
 //!
 //! Header layout (`FF FE FF <len:u8>` UTF-16LE string records):
 //! ```text
 //! 0x00  "SketchUp Model"   string record
 //! 0x20  "{17.3.116}"       version string
-//! 0x3A  16 bytes           format GUID
+//! 0x3A  16 bytes           model GUID (per model; kept across re-saves)
 //! 0x4C  4 bytes            doc-id / seed (per-save noise)
 //! 0x56  FFFF 0000 ... "CVersionMap"   first MFC class record
 //! ```
@@ -15,7 +15,7 @@ use crate::carchive::decode_utf16le;
 
 pub struct Header {
     pub version: String,
-    pub format_guid: String,
+    pub model_guid: String,
 }
 
 /// Read a `FF FE FF <len:u8>` UTF-16LE string record at `off`; return the string
@@ -38,18 +38,26 @@ pub fn parse_header(d: &[u8]) -> Option<Header> {
     if off + 16 > d.len() {
         return None;
     }
-    let format_guid = hex(&d[off..off + 16]);
+    let model_guid = hex(&d[off..off + 16]);
     Some(Header {
         version,
-        format_guid,
+        model_guid,
     })
+}
+
+/// Offset just past the two leading string records (document type and
+/// version) — where the post-2017 container's ZIP archive follows.
+pub(crate) fn strings_end(d: &[u8]) -> Option<usize> {
+    let (_model_tag, off) = read_str_record(d, 0)?;
+    let (_version, off) = read_str_record(d, off)?;
+    Some(off)
 }
 
 /// Offset just past the fixed header (2 str recs, GUID, doc-name str rec, doc id).
 pub fn object_stream_start(d: &[u8]) -> Option<usize> {
     let (_model_tag, off) = read_str_record(d, 0)?;
     let (_version, off) = read_str_record(d, off)?;
-    let off = off + 16; // format GUID
+    let off = off + 16; // model GUID
     let (_doc_name, off) = read_str_record(d, off)?;
     Some(off + 4) // doc_id u32
 }

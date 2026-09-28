@@ -24,10 +24,7 @@ fn instance_is_group_matches_source_class() {
     ] {
         let m = openskp::Model::parse(&corpus(file)).unwrap();
         assert_eq!(m.instances.len(), 1, "{file}: one placed instance");
-        assert_eq!(
-            m.instances[0].is_group, want,
-            "{file}: Instance::is_group"
-        );
+        assert_eq!(m.instances[0].is_group, want, "{file}: Instance::is_group");
     }
 }
 
@@ -65,7 +62,10 @@ fn is_group_reaches_both_json_surfaces() {
 
         let mesh: serde_json::Value = serde_json::from_str(&m.mesh_json()).unwrap();
         let scene = mesh["scene"].as_array().unwrap();
-        assert!(!scene.is_empty(), "{file}: mesh_json scene must have entries");
+        assert!(
+            !scene.is_empty(),
+            "{file}: mesh_json scene must have entries"
+        );
         assert!(
             scene
                 .iter()

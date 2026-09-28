@@ -11,18 +11,18 @@ use crate::{AttrValue, Attribute, Definition, Guide, Image, Instance, Layer, Mat
 
 // ---- shared low-level helpers ----
 
-fn u16le(d: &[u8], off: usize) -> Option<u16> {
+pub(crate) fn u16le(d: &[u8], off: usize) -> Option<u16> {
     d.get(off..off + 2)
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
-fn u32le(d: &[u8], off: usize) -> Option<u32> {
+pub(crate) fn u32le(d: &[u8], off: usize) -> Option<u32> {
     d.get(off..off + 4)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 fn i32le(d: &[u8], off: usize) -> Option<i32> {
     u32le(d, off).map(|v| v as i32)
 }
-fn f64le(d: &[u8], off: usize) -> Option<f64> {
+pub(crate) fn f64le(d: &[u8], off: usize) -> Option<f64> {
     d.get(off..off + 8).map(|b| {
         let mut a = [0u8; 8];
         a.copy_from_slice(b);
@@ -72,7 +72,7 @@ fn decode_strict(bytes: &[u8]) -> Option<String> {
 
 /// Approximates Python's `str.isprintable()` for the (ASCII-dominant) names we
 /// filter: rejects control and separator characters, allows plain space.
-fn is_printable(s: &str) -> bool {
+pub(crate) fn is_printable(s: &str) -> bool {
     s.chars()
         .all(|c| c == ' ' || (!c.is_control() && !c.is_whitespace()))
 }
@@ -80,7 +80,7 @@ fn is_printable(s: &str) -> bool {
 /// All `FF FE FF <len:u8>` string-record markers as `(marker_start, len, end)`
 /// where `end = marker_start + 4` (the start of the UTF-16 payload).
 /// Non-overlapping, left-to-right (matches `re.finditer`).
-fn str_markers(d: &[u8]) -> Vec<(usize, usize, usize)> {
+pub(crate) fn str_markers(d: &[u8]) -> Vec<(usize, usize, usize)> {
     let mut out = Vec::new();
     let n = d.len();
     let mut p = 0;
@@ -96,7 +96,7 @@ fn str_markers(d: &[u8]) -> Vec<(usize, usize, usize)> {
 }
 
 /// Decode the UTF-16 name at a marker `(len, end)`, if present and valid.
-fn marker_name(d: &[u8], len: usize, end: usize) -> Option<String> {
+pub(crate) fn marker_name(d: &[u8], len: usize, end: usize) -> Option<String> {
     d.get(end..end + len * 2).and_then(decode_strict)
 }
 
@@ -278,39 +278,59 @@ fn textured_opacity(d: &[u8], ce: usize) -> f64 {
 }
 
 /// Decode the MFC utf16 string record at exactly `off`, if one is there.
-fn mfc_str_at(d: &[u8], off: usize) -> Option<String> {
+pub(crate) fn mfc_str_at(d: &[u8], off: usize) -> Option<String> {
     let (len, chars_at) = crate::carchive::mfc_strlen(d, off)?;
     d.get(chars_at..chars_at + len * 2).and_then(decode_strict)
 }
 
 /// End offset of the MFC utf16 string record at exactly `off` — one past
 /// its last character byte, where the record's tail data starts.
-fn mfc_str_end_at(d: &[u8], off: usize) -> Option<usize> {
+pub(crate) fn mfc_str_end_at(d: &[u8], off: usize) -> Option<usize> {
     let (len, chars_at) = crate::carchive::mfc_strlen(d, off)?;
     Some(chars_at + len * 2)
 }
 
 // ---- scenes ----
 
-pub fn scenes(d: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    for (_start, len, end) in str_markers(d) {
-        if len == 0 {
-            continue;
+/// True when a CCamera object starts at `at` (§10.6): its new-class record
+/// or a class reference, then a body whose up vector (the third f64
+/// triple) is a finite unit vector.
+pub(crate) fn camera_at(d: &[u8], at: usize) -> bool {
+    let Some(tag) = u16le(d, at) else {
+        return false;
+    };
+    let body = if tag == 0xFFFF {
+        // schema u16, name length u16, name
+        if d.get(at + 4..at + 13) != Some(b"\x07\x00CCamera") {
+            return false;
         }
-        let name = match marker_name(d, len, end) {
-            Some(s) => s,
-            None => continue,
-        };
-        let e = end + len * 2;
-        if is_printable(&name)
-            && d.get(e..e + 8) == Some(b"\xff\xfe\xff\x00\x7f\x00\x00\x00")
-            && (u16le(d, e + 8).unwrap_or(0) & 0x8000) != 0
-        {
-            out.push(name);
+        at + 13
+    } else if tag & 0x8000 != 0 {
+        at + 2
+    } else {
+        return false;
+    };
+    let up: Option<Vec<f64>> = (6..9).map(|i| f64le(d, body + i * 8)).collect();
+    match up {
+        Some(v) if v.iter().all(|x| x.is_finite()) => {
+            ((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() - 1.0).abs() < 1e-6
         }
+        _ => false,
     }
-    out
+}
+
+/// True when the object tag in front of the 3-byte preamble at `pre` is
+/// the `CViewPage` new-class record or a class reference (plain or
+/// escalated).
+pub(crate) fn viewpage_tag_before(d: &[u8], pre: usize) -> bool {
+    if pre >= 15 && d.get(pre - 15..pre) == Some(b"\xff\xff\x0c\x00\x09\x00CViewPage") {
+        return true;
+    }
+    // `7F FF` + u32 class reference (§11): the u32's high bit marks a class
+    if pre >= 6 && u16le(d, pre - 6) == Some(0x7FFF) {
+        return u32le(d, pre - 4).is_some_and(|t| t & 0x8000_0000 != 0);
+    }
+    pre >= 2 && u16le(d, pre - 2).is_some_and(|t| t & 0x8000 != 0 && t != 0xFFFF)
 }
 
 // ---- layers ----
@@ -624,6 +644,8 @@ pub fn component_tree(
         .map(|x| Definition {
             name: x.name.clone(),
             guid: x.guid.clone(),
+            behaviour: Default::default(),
+            timestamp: 0,
             map_index: None, // byte-scan path: the global slot is unknown
         })
         .collect();

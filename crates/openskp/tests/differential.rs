@@ -98,6 +98,39 @@ fn matches_python_reference() {
             exp.as_object_mut().unwrap().remove(k);
             act.as_object_mut().unwrap().remove(k);
         }
+        // The typed settings postdate the oracle; it knows scenes by name only.
+        for k in [
+            "container",
+            "camera",
+            "rendering",
+            "shadows",
+            "units",
+            "styles",
+            "active_style",
+            "watermarks",
+            "fonts",
+            "axes",
+            "text_defaults",
+            "dimension_defaults",
+            "anti_aliased_textures",
+            "animation",
+            "geo_located",
+            "texts",
+            "dimensions",
+        ] {
+            act.as_object_mut().unwrap().remove(k);
+        }
+        if let Some(Value::Array(scenes)) = act.as_object_mut().unwrap().get_mut("scenes") {
+            for s in scenes.iter_mut() {
+                *s = s["name"].clone();
+            }
+        }
+        // The frozen oracle predates the header field's rename: its
+        // "format_guid" is the same 16 bytes the SDK calls "model_guid".
+        let exp_obj = exp.as_object_mut().unwrap();
+        if let Some(g) = exp_obj.remove("format_guid") {
+            exp_obj.insert("model_guid".into(), g);
+        }
 
         checked += 1;
         if let Err(e) = eq(&act, &exp, file) {

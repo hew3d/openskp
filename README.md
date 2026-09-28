@@ -1,7 +1,7 @@
 # OpenSKP
 
-**An open, clean-room reader and specification for the SketchUp 2017
-`.skp` file format.**
+**An open, clean-room reader and specification for the SketchUp `.skp`
+file format — the 2017 format and the current (2026) container.**
 
 SketchUp's native format has no public specification and, until now, no
 open-source reader — the only way to read a `.skp` has been Trimble's
@@ -10,9 +10,11 @@ proprietary SDK. OpenSKP documents the format and reads it natively:
 - **A format specification** — [`docs/SKP_FORMAT.md`](docs/SKP_FORMAT.md)
   plus the Kaitai Struct grammar [`ksy/skp.ksy`](ksy/skp.ksy), detailed
   enough to build an independent parser.
-- **A Rust SDK** — [`crates/openskp`](crates/openskp), a zero-dependency
-  library that reads meshes, materials, UVs, hierarchy, layers, scenes,
-  and attributes.
+- **A Rust SDK** — [`crates/openskp`](crates/openskp), a pure-Rust
+  library (its only dependency is a DEFLATE decoder) that reads meshes,
+  materials, UVs, hierarchy, layers, scenes, attributes, and the
+  document's settings (camera, rendering options, shadows, units,
+  styles, watermarks, and text/dimension annotations).
 - **A CLI and a C ABI** — `openskp id|model|json|mesh`, and `libopenskp`
   with a plain-C header for every other language.
 - **An evidence corpus** — [`corpus/`](corpus/), the authored minimal
@@ -20,21 +22,25 @@ proprietary SDK. OpenSKP documents the format and reads it natively:
   the test suite's oracle.
 
 Everything derives from observing `.skp` files, their COLLADA exports,
-and public knowledge of MFC `CArchive` serialization. **No Trimble SDK,
+and public knowledge of MFC `CArchive` serialization and the ZIP format.
+**No Trimble SDK,
 headers, or SDK-derived knowledge is used** — see the clean-room policy
 in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## The format in one paragraph
 
-A `.skp` is a fixed header (UTF-16 string records, version, format GUID)
+A `.skp` is a fixed header (UTF-16 string records, version, model GUID)
 followed by one uncompressed **MFC `CArchive` object stream** with a
 single shared object map. Geometry is a half-edge kernel (`CVertex` /
 `CEdge` / `CEdgeUse` / `CLoop` / `CFace`) in **f64 inches**; components
 and groups place shared definitions through 13-value transforms; textures
 map through per-face projective matrices. Classes are defined lazily
 inline, so class tags differ per file, and object references index the
-one global map. The full story is in
-[`docs/SKP_FORMAT.md`](docs/SKP_FORMAT.md).
+one global map. Newer releases (observed: SketchUp 2026) keep the header
+strings but replace the stream with a ZIP archive whose `model.dat` is a
+self-describing tree of tagged records carrying the same entities, ids,
+and transforms, with materials as XML plus image files. The full story is
+in [`docs/SKP_FORMAT.md`](docs/SKP_FORMAT.md).
 
 ## Quick start
 
@@ -89,13 +95,17 @@ cargo test --workspace --release     # the acceptance suite
 
 ## Scope
 
-- **Supported:** files saved by SketchUp 2017 (v17.x). This release
-  matters — it is the last SketchUp with a free desktop edition, so
-  2017-format files are what the free ecosystem produces.
+- **Supported:** files saved by SketchUp 2017 (v17.x) — the last
+  release with a free desktop edition, so a large body of existing
+  free-edition models is in this format — and by SketchUp 2026
+  (`{26.x}`), the format current releases, including the free web app,
+  save. Each 2026 corpus file reads equivalent to its 2017 original in
+  geometry, scene, materials, layers, UVs, scenes, guides, and document
+  settings.
+- **Untested:** releases 2018–2025 are unobserved; files in the ZIP
+  container are read by the 2026 reader.
 - **Identified but degraded:** 2013–2016 saves parse header-level with
   loud diagnostics.
-- **Identified and refused:** post-2017 saves (the container became a ZIP
-  archive).
 - **Read-only:** writing `.skp` is a parked milestone
   ([`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)).
 

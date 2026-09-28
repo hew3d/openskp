@@ -66,6 +66,9 @@ pub enum Child {
 
 /// One entry in the MFC store map: a class definition or a (partially or fully
 /// read) object. Index 0 is a sentinel so indices are 1-based like MFC.
+// Entities stay inline: the walk and mesh builder pattern-match
+// `Slot::Object(Entity::…)` in place at dozens of sites.
+#[allow(clippy::large_enum_variant)]
 pub enum Slot {
     Sentinel,
     Class(String),

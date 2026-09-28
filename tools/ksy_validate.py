@@ -18,7 +18,7 @@ for f in sorted(glob.glob(os.path.join(root, "corpus", "2017", "*.skp")) + glob.
         ref = skpparse.parse_header(skpparse.read(f))
         assert m.model_tag.value == "SketchUp Model", m.model_tag.value
         assert m.version.value == ref["version"], (m.version.value, ref["version"])
-        assert m.format_guid.hex() == ref["format_guid"]
+        assert m.model_guid.hex() == ref["format_guid"]  # frozen oracle key
         assert m.first_class.name == "CVersionMap", m.first_class.name
         print(f"  OK   {name:30} ver={m.version.value} cls0={m.first_class.name}")
         ok += 1

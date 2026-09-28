@@ -1,6 +1,6 @@
 //! `openskp` — command-line reader for SketchUp `.skp` files.
 //!
-//!   openskp id    <file>   header (version + format GUID) and class count
+//!   openskp id    <file>   header (version + model GUID) and class count
 //!   openskp model <file>   human-readable decode summary
 //!   openskp json  <file>   full model as JSON (stdout)
 //!   openskp mesh  <file>   concrete mesh + composed scene as JSON (stdout)
@@ -63,20 +63,25 @@ fn main() -> ExitCode {
 
 fn id(data: &[u8]) -> ExitCode {
     // Header-only identification first: `id` must say WHAT a file is even
-    // when the container is one this crate refuses to walk (post-2017).
+    // when the container is one this crate cannot read.
     let Some((version, guid)) = openskp::header_info(data) else {
         eprintln!("openskp: malformed .skp header");
         return ExitCode::FAILURE;
     };
     println!("version   {version}");
-    println!("format    {guid}");
+    if let Some(guid) = guid {
+        println!("model     {guid}");
+    }
     match openskp::detect_container(data) {
         openskp::Container::Carchive2017 => {
             let classes = openskp::inventory(data).map(|v| v.len()).unwrap_or(0);
             println!("classes   {classes}");
         }
+        openskp::Container::Zip => {
+            println!("container post-2017 ZIP (model.dat record tree)");
+        }
         openskp::Container::Unknown => {
-            println!("container unknown (post-2017 layout?) — id only; not readable here");
+            println!("container unknown — id only; not readable here");
         }
     }
     ExitCode::SUCCESS
@@ -88,10 +93,15 @@ fn summary(path: &str, m: &openskp::Model, data: &[u8]) {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string());
     println!("== {name} ==  version {}", m.version);
-    println!(
-        "inventory: {} classes",
-        openskp::inventory(data).map(|v| v.len()).unwrap_or(0)
-    );
+    if openskp::detect_container(data) == openskp::Container::Zip {
+        // Geometry offsets below are positions in the archive's model.dat.
+        println!("container: post-2017 ZIP (model.dat record tree)");
+    } else {
+        println!(
+            "inventory: {} classes",
+            openskp::inventory(data).map(|v| v.len()).unwrap_or(0)
+        );
+    }
     // Which walk served the file (SKP_FORMAT §4s) — never silent.
     for d in &m.diagnostics {
         match d {
@@ -203,8 +213,72 @@ fn summary(path: &str, m: &openskp::Model, data: &[u8]) {
         let names: Vec<_> = m.layers.iter().map(|l| l.name.clone()).collect();
         println!("layers: {names:?}");
     }
-    if !m.scenes.is_empty() {
-        println!("scenes: {:?}", m.scenes);
+    if let Some(c) = &m.camera {
+        println!(
+            "camera: eye {:?} target {:?} {} fov {:.1}",
+            round3(c.eye_m),
+            round3(c.target_m),
+            if c.perspective {
+                "perspective"
+            } else {
+                "parallel"
+            },
+            c.fov_deg
+        );
+    }
+    if let Some(r) = &m.rendering {
+        println!(
+            "rendering: face style {} edges {} profiles {} sky {} ground {} shadows {}",
+            r.face_style,
+            r.edges,
+            r.profiles,
+            r.sky,
+            r.ground,
+            m.shadows.as_ref().is_some_and(|s| s.displayed)
+        );
+    }
+    if let Some(s) = &m.shadows {
+        println!(
+            "shadows: {} {} ({:.4}, {:.4}) UTC{:+} light {} dark {}",
+            s.city, s.country, s.latitude, s.longitude, s.tz_offset_h, s.light, s.dark
+        );
+    }
+    println!(
+        "units: format {} unit {} precision {} snap {}",
+        m.units.length_format, m.units.length_unit, m.units.length_precision, m.units.length_snap
+    );
+    if !m.styles.is_empty() {
+        for (i, st) in m.styles.iter().enumerate() {
+            println!(
+                "style {i}{}: {:?} watermarks {}",
+                if Some(i) == m.active_style {
+                    " (active)"
+                } else {
+                    ""
+                },
+                st.name,
+                st.watermarks.len()
+            );
+        }
+    }
+    for sc in &m.scenes {
+        println!(
+            "scene: {:?} saved {:#x}{}{}{}{}",
+            sc.name,
+            sc.saved.0,
+            if sc.camera.is_some() { " camera" } else { "" },
+            if sc.rendering.is_some() { " style" } else { "" },
+            if sc.shadows.is_some() { " shadows" } else { "" },
+            if sc.axes.is_some() { " axes" } else { "" },
+        );
+    }
+    if !m.fonts.is_empty() || !m.texts.is_empty() || !m.dimensions.is_empty() {
+        println!(
+            "annotations: {} fonts, {} texts, {} dimensions",
+            m.fonts.len(),
+            m.texts.len(),
+            m.dimensions.len()
+        );
     }
     if !m.guides.is_empty() {
         println!("guides: {}", m.guides.len());
@@ -214,4 +288,8 @@ fn summary(path: &str, m: &openskp::Model, data: &[u8]) {
     }
     let kinds: Vec<_> = m.images.iter().map(|i| i.kind.clone()).collect();
     println!("images: {} embedded ({})", m.images.len(), kinds.join(", "));
+}
+
+fn round3(v: [f64; 3]) -> [f64; 3] {
+    v.map(|x| (x * 1e3).round() / 1e3)
 }

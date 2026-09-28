@@ -29,8 +29,11 @@ openskp_model *openskp_open(const char *path);
 /* Parse from an in-memory buffer. NULL on error. */
 openskp_model *openskp_parse(const unsigned char *data, size_t len);
 
-/* Whole model as NUL-terminated UTF-8 JSON, owned by m (valid until openskp_free).
- * NULL if m is NULL. */
+/* Whole model as NUL-terminated UTF-8 JSON, owned by m (valid until openskp_free):
+ * definitions, instances, geometry-run topology, materials, layers, scenes,
+ * guides, attributes, images, document settings (camera, rendering options,
+ * shadows, units, styles, watermarks, fonts, texts, dimensions), and any
+ * desync diagnostics. See docs/SDK.md for the full key list. NULL if m is NULL. */
 const char *openskp_model_json(openskp_model *m);
 
 /* Concrete mesh as NUL-terminated UTF-8 JSON, owned by m (valid until

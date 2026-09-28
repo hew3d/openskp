@@ -11,7 +11,7 @@ and the SDK's acceptance tests parse all of them.
 | [`2017/`](2017/) | The primary corpus: SketchUp 2017 (v17.3.116) files authored as minimal pairs, each isolating one format feature, with COLLADA (`.dae`) ground-truth exports. |
 | [`legacy/`](legacy/) | The same 1 m box saved by SketchUp 2013–2016 — container identification and version-degradation coverage. |
 | [`third-party/`](third-party/) | A full-scale real production model used as the stress/validation benchmark. |
-| [`future/`](future/) | Post-2017 container probes (out of scope for the 2017 spec, kept as evidence). |
+| [`2026/`](2026/) | SketchUp 2026 saves of 2017 corpus models — the post-2017 container, each read equivalent to its decoded 2017 original in geometry, scene, materials, layers, and UVs. |
 
 ## Authoring conventions
 

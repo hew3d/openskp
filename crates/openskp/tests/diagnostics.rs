@@ -46,7 +46,7 @@ fn clean_corpus_has_zero_desync_diagnostics() {
     for entry in std::fs::read_dir(corpus_dir()).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().and_then(|e| e.to_str()) != Some("skp") {
-            continue; // .dae ground truth, subdirs (future/ is excluded by read_dir being non-recursive)
+            continue; // .dae ground truth, subdirs (sibling dirs are excluded by read_dir being non-recursive)
         }
         if is_backup(&path) {
             continue;
