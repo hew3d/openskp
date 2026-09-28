@@ -502,6 +502,7 @@ impl Model {
                         _ => None,
                     })
                     .collect(),
+                active_section: None, // set below for the root run (§4l); definition tails undecoded
                 sections: map[lo.min(map.len())..hi.min(map.len())]
                     .iter()
                     .filter_map(|s| match s {
@@ -545,7 +546,7 @@ impl Model {
         // the count u32): `scene()` treats instances whose transform lies
         // outside every run as scene roots, and the root list's named
         // groups/instances are exactly those.
-        geometry.push(run_of(
+        let mut root = run_of(
             cw.root_list_at,
             cw.root_list_at,
             cw.roots.len(),
@@ -553,7 +554,18 @@ impl Model {
             None,
             cw.root_slot_floor,
             map.len(),
-        ));
+        );
+        // §4l: the root tail's first pointer names the root list's active
+        // section plane by map slot; a slot that is not one of the root
+        // list's own planes is not an active plane.
+        root.active_section = cw
+            .root_active_slot
+            .and_then(|slot| match map.get(slot) {
+                Some(Slot::Object(Entity::SectionPlane { pid, .. })) => Some(*pid),
+                _ => None,
+            })
+            .filter(|pid| root.sections.iter().any(|s| s.pid == *pid));
+        geometry.push(root);
 
         // Instances: every CGroup/CComponentInstance in the map, in
         // serialization order, linked by the def-ref = global slot.
@@ -1991,6 +2003,7 @@ mod tests {
             placed: vec![],
             curve_members: vec![],
             sections: vec![],
+            active_section: None,
         }];
         let mut materials: Vec<Material> = Vec::new();
         let shared_refs = vec![(0usize, 7u16)];
@@ -2071,6 +2084,7 @@ mod tests {
             placed: vec![],
             curve_members: vec![],
             sections: vec![],
+            active_section: None,
         }];
         // One solid material (no inline dib) placed at slot 1 by the
         // arithmetic model (base 1 -> first = (1+1) - (1+0) = 1); the

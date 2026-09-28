@@ -75,7 +75,12 @@ the 2017 byte-scan fallback and on 2026 files, and `pid` is `0` on
 the legacy path. `GeometryRun` also carries `sections: Vec<SectionPlane>`
 — the section planes placed directly in that run, in the run's LOCAL
 frame (unit normal `plane[0..3]`, offset `plane[3]`, inches), read on
-both containers; `Scene::active_section_planes` names them by `pid`.
+both containers; `Scene::active_section_planes` names them by `pid`, and
+`GeometryRun::active_section` is the `pid` of the plane currently cutting
+that run's entity list (the model's own active cut, outside any scene).
+The 2026 container records it for every container (`0x1394`); a 2017
+file records the root list's in the root tail (§4l), so on 2017 it is
+read for the root run only and is `None` for definitions.
 
 ### World space and UVs
 

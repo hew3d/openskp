@@ -89,6 +89,7 @@ content as ordinary model content).
 | `dimension.skp` | Two linear dimensions — `CDimensionLinear` + `CSkFont` (inline and back-referenced forms). |
 | `text.skp` | One leader text and one screen text — both `CText` variants. |
 | `section-plane.skp` | An active section plane at exactly 0.5 m — the plane equation record. |
+| `section-plane-deactivated.skp` | `section-plane.skp` plus a second section plane, which is the active one; the first stays placed but deactivated. Isolates the active-plane marker: the two plane records are identical, and the root tail's first pointer (§4l) moves from the first plane's map slot to the second's. |
 | `construction-point.skp` | A guide point at exactly (1 m, 2 m, 3 m) — position plus tape-measure anchor. |
 | `guide.skp` | An infinite construction line 1 m off axis — anchor, unit direction, and the ±1e30 infinite-bounds sentinel. |
 | `image.skp` | An imported raster image placed at 1 m width — the `CImage` entity. |

@@ -694,3 +694,57 @@ fn every_2026_file_reads_the_same_settings_as_its_2017_original() {
         );
     }
 }
+
+/// The container-level active section plane: a 2026 file names the plane
+/// cutting each entity list (§16.4 `0x1394`); a 2017 file names the root
+/// list's in the root tail (§4l). section-plane-deactivated.skp is the
+/// minimal pair for the 2017 marker: two planes whose records are
+/// identical, the second active.
+#[test]
+fn the_active_section_plane_is_read_from_both_containers() {
+    for stem in ["section-plane", "feature-pack", "house-plus"] {
+        for (dir, m) in [
+            ("2017", model(&format!("2017/{stem}.skp"))),
+            ("2026", model(&format!("2026/{stem}.skp"))),
+        ] {
+            let root = m
+                .geometry
+                .iter()
+                .find(|r| r.def_index.is_none())
+                .unwrap_or_else(|| panic!("{dir}/{stem}: a root run"));
+            assert_eq!(
+                root.sections.len(),
+                1,
+                "{dir}/{stem}: one plane at the root"
+            );
+            assert_eq!(
+                root.active_section,
+                Some(root.sections[0].pid),
+                "{dir}/{stem}: the root's active plane is its one plane"
+            );
+        }
+    }
+    let m = model("2017/section-plane-deactivated.skp");
+    let root = m.geometry.iter().find(|r| r.def_index.is_none()).unwrap();
+    assert_eq!(root.sections.len(), 2, "two planes at the root");
+    assert_eq!(
+        root.sections[0].pid, 4795,
+        "the original plane keeps its id"
+    );
+    assert_eq!(
+        root.active_section,
+        Some(root.sections[1].pid),
+        "the newer plane is the active one"
+    );
+    assert!(
+        !root.sections[0].hidden && !root.sections[1].hidden,
+        "deactivated is not hidden"
+    );
+    for stem in ["2026/box", "2017/box", "2017/two-scenes"] {
+        let m = model(&format!("{stem}.skp"));
+        assert!(
+            m.geometry.iter().all(|r| r.active_section.is_none()),
+            "{stem}: no plane"
+        );
+    }
+}

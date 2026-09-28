@@ -168,11 +168,13 @@ The exact composition of the pre-model region is not specified — a reader
 reaches the model section via the calibration anchors of §3.2 rather than
 by decoding every manager. The root list ends exactly where the root tail
 begins on every 2017 corpus file: a u32 (0 in every corpus file, 1 in a
-third-party house), two nullable object pointers (the first is a
-back-reference in the three corpus files holding a section plane —
-candidate: the active plane — and, in that house, a new `CRelationship`
-object (§7.1) written inline; the second is null in every observed
-file), a zero byte, a u32 (`58 79 F0 6A` in every authored file,
+third-party house), two nullable object pointers (the first is the root
+list's ACTIVE section plane, a back-reference to its map slot: null in
+every file without one, the lone plane's slot in the three corpus files
+holding a plane, and in section-plane-deactivated.skp — two planes, the
+older one deactivated — the newer plane's slot; in that house it is a
+new `CRelationship` object (§7.1) written inline; the second is null in
+every observed file), a zero byte, a u32 (`58 79 F0 6A` in every authored file,
 `58 BC CB 3D` in theater-2017; meaning undecoded), a zero byte, then the
 utf16 city string (`FF FE FF` at +14). The walk reads a counted list, so
 a mis-sized body can still "complete" it on misread elements without a
@@ -675,7 +677,10 @@ the guide point's new-class record follows directly).
 
 **CSectionPlane** (schema 2): preamble + drawbase + 4 × f64 plane
 (A, B, C, D), nothing after; the plane is in the owning entity list's
-local frame (unit normal + offset, inches). feature-pack.skp's plane
+local frame (unit normal + offset, inches). The record carries no active
+flag — an active and a deactivated plane serialize identically
+(section-plane-deactivated.skp); which root plane cuts is the root tail's
+first pointer (§4l). feature-pack.skp's plane
 (0, 1, 0, 0) — the front face of the authored box — is followed directly
 by a CText new-class record; in section-plane.skp and house-plus.skp the
 plane is the last root entity and the four zero bytes behind it open the
@@ -1227,7 +1232,7 @@ drawing-element header (its id is the id instances refer to) and pools:
 | `0x1391` guide lines | `0x4269` | base `0x4268`, 8 f64 `0x426a` (point, unit direction, parameter bounds) |
 | `0x1392` guide points | `0x426c` | base `0x4268`, point `0x426d`, tape-measure anchor `0x426e` |
 | `0x1393` section planes | `0x445c` | drawing element, plane `0x445d` (4 f64), name `0x445e`, symbol `0x445f` |
-| `0x1394` | — | id of the active section plane (present only while one is active) |
+| `0x1394` | — | id of the active section plane (present only while one is active; read as `GeometryRun::active_section`) |
 | `0x1396` curves | `0x4a38` | entity base, member-edge count `0x4a39` (sums equal the edges carrying `0x0bbb`), … |
 | `0x1397` arc curves | `0x4c2c` | curve `0x4a38`, arc frame `0x4c2d` (16 f64) |
 | `0x1398` texts | `0x55f0` | §16.13 |

@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "openskp"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "miniz_oxide",
  "serde_json",
@@ -39,14 +39,14 @@ dependencies = [
 
 [[package]]
 name = "openskp-capi"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "openskp",
 ]
 
 [[package]]
 name = "openskp-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "openskp",
 ]

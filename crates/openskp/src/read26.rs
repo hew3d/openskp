@@ -236,6 +236,7 @@ const GUIDE_POINTS: u16 = 0x1392;
 const SECTION_PLANES: u16 = 0x1393;
 const SECTION_PLANE: u16 = 0x445C; // §16.4: drawing element + plane + name + symbol
 const SECTION_PLANE_EQ: u16 = 0x445D; // 4 f64: A, B, C, D
+const ACTIVE_SECTION_PLANE: u16 = 0x1394; // id of the container's active plane, present only while one is active
 const PLAIN_CURVES: u16 = 0x1396;
 const ARC_CURVES: u16 = 0x1397;
 const TEXTS: u16 = 0x1398;
@@ -596,6 +597,7 @@ fn container(
             });
         }
     }
+    let active_section = uint(n.get(ACTIVE_SECTION_PLANE));
     let mut sections = Vec::new();
     if let Some(pool) = pool(n, SECTION_PLANES, diags) {
         for sp in pool.nodes(SECTION_PLANE)? {
@@ -740,6 +742,7 @@ fn container(
             start,
             end,
             sections,
+            active_section,
             top_level: top,
             frame: Some(top),
             def_index: def.map(|d| d as usize),

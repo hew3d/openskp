@@ -275,6 +275,14 @@ pub struct GeometryRun {
     /// Section planes placed in the run, serialization order (§10.3), in
     /// the run's local frame. Continuous-path only.
     pub sections: Vec<SectionPlane>,
+    /// Persistent id of the run's ACTIVE section plane — the one cutting
+    /// its entity list — when one is active. 2026: every container records
+    /// it (§16.4, `0x1394`, present only while a plane is active). 2017:
+    /// the root tail's first pointer names the ROOT list's active plane
+    /// (§4l), so it is read for the root run; a definition's own active
+    /// plane is not decoded there (definition tails have another shape)
+    /// and reads `None`. `None` on the legacy byte-scan path.
+    pub active_section: Option<u32>,
 }
 
 /// A recorded parse anomaly (Phase 0.4). Clean 2013–2017 files parse with
@@ -487,6 +495,7 @@ pub fn geometry_runs_with_diagnostics(d: &[u8]) -> (Vec<GeometryRun>, Vec<Diagno
                 .collect(),
             curve_members: Vec::new(), // legacy walk never decodes CCurve
             sections: Vec::new(),
+            active_section: None,
         });
     }
     (out, diagnostics)

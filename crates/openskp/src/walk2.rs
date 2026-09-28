@@ -61,6 +61,10 @@ pub struct Continuous {
     pub root_slot_floor: usize,
     /// Offset just past the last root element (the §4l tail follows).
     pub end: usize,
+    /// Global map slot the root tail's first pointer back-references: the
+    /// root list's ACTIVE section plane (§4l), `None` when the pointer is
+    /// null or an inline object.
+    pub root_active_slot: Option<usize>,
     /// Context-directed pad-slot bindings taken (slot, class) — §4s
     /// calibration evidence, surfaced as diagnostics.
     pub bound: Vec<(usize, String)>,
@@ -286,6 +290,7 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
     }
 
     let bound = std::mem::take(&mut ar.bound);
+    let root_active_slot = root_tail_back_ref(d, ar.pos);
     Ok(Continuous {
         base,
         map: std::mem::take(&mut ar.map),
@@ -295,6 +300,7 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
         root_list_at,
         root_slot_floor,
         end: ar.pos,
+        root_active_slot,
         bound,
     })
 }
@@ -395,11 +401,12 @@ pub fn resolve_range(map: &[Slot], lo: usize, hi: usize) -> (usize, usize) {
 
 /// The §4l root tail's opening shape: a u32 (0 or 1 observed), two
 /// nullable object pointers, `00`, u32, `00`, then the utf16 geo-location
-/// city string (`FF FE FF`). On every corpus file the u32 is 0 and the
-/// pointers are null or back-references (a back-reference in the files
-/// holding a section plane); a third-party house stores 1 and, as the
-/// first pointer, a new `CRelationship` object (preamble + three
-/// pointers).
+/// city string (`FF FE FF`). On every corpus file the u32 is 0; the first
+/// pointer is the root list's active section plane (a back-reference to
+/// its map slot — null when no plane is active, and the slot of the
+/// NEWER plane in section-plane-deactivated.skp, where the older one
+/// stays placed but off); a third-party house stores 1 and, as the first
+/// pointer, a new `CRelationship` object (preamble + three pointers).
 fn is_root_tail(d: &[u8], at: usize) -> bool {
     let Some(n) = d
         .get(at..at + 4)
@@ -419,6 +426,23 @@ fn is_root_tail(d: &[u8], at: usize) -> bool {
     match d.get(b..b + 9) {
         Some(t) => t[0] == 0 && t[5] == 0 && t[6..9] == [0xff, 0xfe, 0xff],
         None => false,
+    }
+}
+
+/// The map slot the root tail's first pointer back-references (§4l): the
+/// root list's active section plane. `None` for a null pointer, an inline
+/// new object, or a tail that does not parse.
+fn root_tail_back_ref(d: &[u8], at: usize) -> Option<usize> {
+    let tag = u16le(d, at + 4)?;
+    match tag {
+        0 | 0xFFFF => None,
+        0x7FFF => {
+            let v = d.get(at + 6..at + 10)?;
+            let v = u32::from_le_bytes([v[0], v[1], v[2], v[3]]);
+            (v & 0x8000_0000 == 0).then_some(v as usize)
+        }
+        t if t & 0x8000 != 0 => None,
+        t => Some(t as usize),
     }
 }
 
