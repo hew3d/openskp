@@ -511,6 +511,9 @@ pub struct Scene {
     pub hidden_entities: Vec<u32>,
     /// Persistent ids of the active section planes.
     pub active_section_planes: Vec<u32>,
+    /// Indices into `Model::layers` of the layers the scene hides. Empty
+    /// on the 2017 legacy byte-scan path.
+    pub hidden_layers: Vec<usize>,
     pub in_animation: bool,
 }
 
@@ -531,6 +534,8 @@ pub struct Anchor {
     pub kind: u32,
     /// Metres; for kind 5 the first component is the edge parameter.
     pub point_m: [f64; 3],
+    /// Persistent id of the anchored entity, when one is stored.
+    pub entity: Option<u32>,
 }
 
 /// How a text is led to its anchor.

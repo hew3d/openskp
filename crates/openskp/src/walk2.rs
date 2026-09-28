@@ -130,6 +130,24 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
     // ---- the real walk, map pre-padded to the calibrated base ----
     let mut ar = CArchive::new_continuous(d, decl, base);
     ar.ctx = ctx;
+    // Production models run one map slot per ~35–50 bytes of MODEL
+    // SECTION (the pre-model region ahead of `decl` — thumbnails, embedded
+    // textures — makes no slots here; `base` already counts it exactly);
+    // sizing the map up front for the densest observed ratio spares the
+    // final doubling's transient copy (the walk's memory peak: a 464 MB
+    // house needed 13.4 M slots) and turns an impossible model into a
+    // typed failure before any body is read.
+    if ar
+        .map
+        .try_reserve(d.len().saturating_sub(decl) / 28)
+        .is_err()
+    {
+        return Err(WalkFail {
+            stage: "allocation",
+            at: decl,
+            detail: crate::carchive::OUT_OF_MEMORY.into(),
+        });
+    }
 
     let mut layer_slots = Vec::with_capacity(layer_count);
     for _ in 0..layer_count {
@@ -306,6 +324,7 @@ pub fn walk(d: &[u8]) -> Result<Continuous, WalkFail> {
 fn calibrate(d: &[u8], decl: usize, ctx: &Option<crate::ctx::Ctx>) -> Result<usize, WalkFail> {
     let mut ar = CArchive::new_continuous(d, decl, 0);
     ar.ctx = ctx.clone();
+    ar.calibrating = true;
     if let Err(s) = ar.read_object() {
         return Err(WalkFail::from_stall("calibration", s));
     }
@@ -374,14 +393,69 @@ pub fn resolve_range(map: &[Slot], lo: usize, hi: usize) -> (usize, usize) {
     (sat, con)
 }
 
-/// The §4l root tail's opening shape, identical on every 2017 corpus file:
-/// `00 00 00 00` + u32 + `00` + u32 + `00`, then the utf16 geo-location
-/// city string (`FF FE FF` at +14).
+/// The §4l root tail's opening shape: a u32 (0 or 1 observed), two
+/// nullable object pointers, `00`, u32, `00`, then the utf16 geo-location
+/// city string (`FF FE FF`). On every corpus file the u32 is 0 and the
+/// pointers are null or back-references (a back-reference in the files
+/// holding a section plane); a third-party house stores 1 and, as the
+/// first pointer, a new `CRelationship` object (preamble + three
+/// pointers).
 fn is_root_tail(d: &[u8], at: usize) -> bool {
-    match d.get(at..at + 17) {
-        Some(t) => t[0..4] == [0; 4] && t[8] == 0 && t[13] == 0 && t[14..17] == [0xff, 0xfe, 0xff],
+    let Some(n) = d
+        .get(at..at + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    else {
+        return false;
+    };
+    if n > 1 {
+        return false;
+    }
+    let Some(a) = pointer_end(d, at + 4, true) else {
+        return false;
+    };
+    let Some(b) = pointer_end(d, a, false) else {
+        return false;
+    };
+    match d.get(b..b + 9) {
+        Some(t) => t[0] == 0 && t[5] == 0 && t[6..9] == [0xff, 0xfe, 0xff],
         None => false,
     }
+}
+
+/// End offset of the MFC object pointer at `at`: null (`00 00`), a
+/// back-reference (u16, or `7F FF` + u32), or — when `allow_new` — a new
+/// object of an already-declared class (`0x8000 | slot`, or `7F FF` + u32
+/// with the high bit set) or a `CRelationship` new-class declaration,
+/// followed by a relationship body: 3-byte preamble + three pointers.
+fn pointer_end(d: &[u8], at: usize, allow_new: bool) -> Option<usize> {
+    let tag = u16le(d, at)?;
+    let (new, body) = match tag {
+        0 => return Some(at + 2),
+        0xFFFF => {
+            let len = u16le(d, at + 4)? as usize;
+            if d.get(at + 6..at + 6 + len)? != b"CRelationship" {
+                return None;
+            }
+            (true, at + 6 + len)
+        }
+        0x7FFF => {
+            let v = d.get(at + 2..at + 6)?;
+            let v = u32::from_le_bytes([v[0], v[1], v[2], v[3]]);
+            (v & 0x8000_0000 != 0, at + 6)
+        }
+        t => (t & 0x8000 != 0, at + 2),
+    };
+    if !new {
+        return Some(body);
+    }
+    if !allow_new || d.get(body..body + 3)? != [0, 0, 0] {
+        return None;
+    }
+    let mut p = body + 3;
+    for _ in 0..3 {
+        p = pointer_end(d, p, false)?;
+    }
+    Some(p)
 }
 
 fn find(d: &[u8], needle: &[u8]) -> Option<usize> {

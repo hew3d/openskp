@@ -75,3 +75,55 @@ fn a_scene_behind_an_escalated_class_reference_is_found() {
     let m = openskp::Model::parse(&big).unwrap();
     assert_eq!(names(&m), ["Scene 1", "Scene 2"]);
 }
+
+#[test]
+fn a_section_plane_reads_to_its_exact_extent() {
+    // section-plane.skp: the plane is the last root element; with the exact
+    // extent (no trailing u32) the root list still closes and the plane is
+    // the authored horizontal cut at 0.5 m, in the root's frame.
+    let m = model("2017/section-plane.skp");
+    let root = m.geometry.iter().find(|r| r.def_index.is_none()).unwrap();
+    assert_eq!(root.sections.len(), 1);
+    let [a, b, c, d] = root.sections[0].plane;
+    assert!(a.abs() < 1e-12 && b.abs() < 1e-12 && (c.abs() - 1.0).abs() < 1e-12);
+    assert!((d.abs() - 0.5 * openskp::INCH).abs() < 1e-6, "offset {d}");
+    assert!(
+        !m.diagnostics.iter().any(|d| d.is_desync()),
+        "clean continuous read"
+    );
+}
+
+#[test]
+fn house_plus_scenes_name_hidden_entities_and_an_active_section_plane_by_pid() {
+    let m = model("2017/house-plus.skp");
+    assert_eq!(m.scenes.len(), 2);
+    let s1 = &m.scenes[0];
+    assert_eq!(s1.hidden_entities.len(), 2);
+    assert_eq!(
+        s1.active_section_planes.len(),
+        1,
+        "Scene 1 has an active section cut"
+    );
+    // The active plane is one the geometry walk placed (root list or a
+    // definition), found by persistent id, with a unit normal.
+    let sp = m
+        .geometry
+        .iter()
+        .flat_map(|r| r.sections.iter())
+        .find(|p| p.pid == s1.active_section_planes[0])
+        .expect("the scene's section plane is a walked CSectionPlane");
+    let [a, b, c, _] = sp.plane;
+    assert!(((a * a + b * b + c * c).sqrt() - 1.0).abs() < 1e-9);
+    let s2 = &m.scenes[1];
+    assert_eq!(s2.hidden_entities.len(), 2);
+    assert!(s2.active_section_planes.is_empty());
+    // Both scenes hide the same two entities, which are not placed
+    // instances (hidden faces or annotations).
+    assert_eq!(s1.hidden_entities, s2.hidden_entities);
+    assert!(
+        !m.instances
+            .iter()
+            .any(|i| s1.hidden_entities.contains(&i.pid)),
+        "the hidden entities are not placed instances"
+    );
+}

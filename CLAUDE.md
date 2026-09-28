@@ -97,7 +97,10 @@ equivalent to its 2017 original (geometry, scene, materials, layers,
 UVs, scenes, guides, document settings; `images`/`attributes` differ by
 design), and
 theater-2026 meets the theater
-COLLADA oracle. Remaining unknowns: `docs/SKP_FORMAT.md` §15, §16.9.
+COLLADA oracle. The continuous walk also reads production-scale 2017
+models beyond the corpus, checked by the opt-in
+`crates/openskp/tests/external_models.rs` against local third-party
+files. Remaining unknowns: `docs/SKP_FORMAT.md` §15, §16.9.
 
 ## Commands
 
@@ -105,3 +108,4 @@ COLLADA oracle. Remaining unknowns: `docs/SKP_FORMAT.md` §15, §16.9.
 - Verify grammar + reference parser: `./scripts/verify.sh`
 - Analyze bytes: `python3 tools/skptool.py <cmd> corpus/2017/<file>.skp`
   (Python tooling is stdlib-only)
+- Test against local production-scale files (never committed): `OPENSKP_EXTERNAL_MODELS=<dir> cargo test --workspace --release`

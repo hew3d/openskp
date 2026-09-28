@@ -260,6 +260,7 @@ pub(crate) fn axes(n: &Node<'_>) -> Result<Axes, Error> {
 pub(crate) fn scenes(
     top: &Node<'_>,
     style_names: &HashMap<u32, String>,
+    layer_index: &HashMap<u32, usize>,
 ) -> Result<Vec<Scene>, Error> {
     let mut out = Vec::new();
     let Some(sec) = top.node(0x0207)? else {
@@ -295,6 +296,10 @@ pub(crate) fn scenes(
             axes,
             hidden_entities: ids(pg.get(0x714B)),
             active_section_planes: ids(pg.get(0x7151)),
+            hidden_layers: ids(pg.get(0x7150))
+                .iter()
+                .filter_map(|id| layer_index.get(id).copied())
+                .collect(),
             in_animation: flag(pg.get(0x7152)),
         });
     }
@@ -325,11 +330,20 @@ fn anchor(n: Option<Node<'_>>, at: usize) -> Result<Anchor, Error> {
         return Ok(Anchor {
             kind: 0,
             point_m: [0.0; 3],
+            entity: None,
         });
     };
     let a = a.need(0x5208)?;
     let kind = uint(a.get(0x5209)).unwrap_or(0);
     let p = f64s::<3>(a.get(0x520A), at)?;
+    // `0x520b > 0x53fc` names the anchored entity (§16.13).
+    let entity = match a.node(0x520B)? {
+        Some(e) => match e.node(0x53FC)? {
+            Some(t) => uint(t.get(0x53FD)),
+            None => None,
+        },
+        None => None,
+    };
     Ok(Anchor {
         kind,
         point_m: if kind == 5 {
@@ -337,6 +351,7 @@ fn anchor(n: Option<Node<'_>>, at: usize) -> Result<Anchor, Error> {
         } else {
             m3(p)
         },
+        entity,
     })
 }
 

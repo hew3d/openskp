@@ -49,7 +49,9 @@ pub enum Entity {
         back_material: u16,
         hidden: bool,
         layer: u16,
-        plane: [f64; 4],
+        /// Boxed: the map holds one slot per object of a multi-million
+        /// object model, so the inline variant size is what bounds memory.
+        plane: Box<[f64; 4]>,
         loops: Vec<Child>,
         /// The preamble's attribute-container pointer (§4s) — on textured
         /// faces an inline `CAttributeContainer` holding the face's
@@ -66,38 +68,21 @@ pub enum Entity {
     },
     ArcCurve {
         pid: u32,
-        params: [f64; 14],
+        params: Box<[f64; 14]>,
     },
     /// A linear dimension (SKP_FORMAT §10.1).
     Dimension {
         pid: u32,
-        text_override: String,
-        font: Child,
-        /// `(kind, point in inches, entity)` for the start and end anchors.
-        anchors: [(u32, [f64; 3], Child); 2],
-        normal: [f64; 3],
-        x_axis: [f64; 3],
-        /// Inches.
-        offset: f64,
-        text_position: u32,
-        aligned: bool,
+        /// Boxed: the payload is far larger than a map slot (see `Ftc`).
+        body: Box<DimensionBody>,
     },
     /// A text annotation — leader or screen text (SKP_FORMAT §10.2). The
     /// fields after `content` are decoded only when the middle has the
     /// documented length; otherwise they stay at their defaults.
     Text {
         pid: u32,
-        content: String,
-        font: Child,
-        screen_position: [f64; 2],
-        anchor_kind: u32,
-        /// Inches.
-        anchor_point: [f64; 3],
-        anchor_entity: Child,
-        /// Inches for a pushpin leader, screen space otherwise.
-        leader_offset: [f64; 3],
-        leader: u32,
-        arrow: u32,
+        /// Boxed: the payload is far larger than a map slot (see `Ftc`).
+        body: Box<TextBody>,
     },
     /// A font object (inline in dimension/text bodies).
     Font {
@@ -118,7 +103,7 @@ pub enum Entity {
     InstancePlaced {
         pid: u32,
         defref: u32,
-        transform: [f64; 13],
+        transform: Box<[f64; 13]>,
         name: String,
         /// File offset of the 13-f64 transform block (top-level detection).
         tf_at: usize,
@@ -134,6 +119,7 @@ pub enum Entity {
     SectionPlane {
         pid: u32,
         plane: [f64; 4],
+        hidden: bool,
     },
     /// A tape-measure guide point (Phase 2.2, typed-dimension-proven).
     ConstructionPoint {
@@ -147,9 +133,8 @@ pub enum Entity {
     /// resuming byte-exactly.
     ConstructionLine {
         pid: u32,
-        point_in: [f64; 3],
-        direction: [f64; 3],
-        bounds: [f64; 2],
+        /// point (3), unit direction (3), line-parameter bounds (2); boxed.
+        params: Box<[f64; 8]>,
     },
     /// A placed image entity (exact extent — SKP_FORMAT §4l, §10.4).
     Image {
@@ -174,16 +159,14 @@ pub enum Entity {
     /// index is the one the def-refs match).
     ComponentDef {
         pid: u32,
-        name: String,
-        desc: String,
-        guid: String,
-        /// Declared global map index (§4h prelude `decl − 1`).
+        /// Name, description, GUID and timestamp, boxed (see `Face::plane`).
+        meta: Box<DefMeta>,
+        /// Declared global map index (§4h prelude `decl − 1`; 0 when the
+        /// prelude declared nothing).
         decl_index: usize,
         /// Declared entity-list element count.
         count: usize,
         entities: Vec<Child>,
-        timestamp: u32,
-        behaviour: crate::settings::Behaviour,
     },
     /// A definition preview — schema 1 (§4s): camera + nullable image.
     Thumbnail {
@@ -217,20 +200,7 @@ pub enum Entity {
     /// faces), then the front/back pin lists and two flag u32s.
     FaceTextureCoords {
         pid: u32,
-        /// Front map k0..k8 (row-major 3×3, texture-in → face-local-in).
-        front: [f64; 9],
-        /// k9..k11 — zero on every authored user face; TBD (§4v).
-        front_extra: [f64; 3],
-        /// Back map k12..k20.
-        back: [f64; 9],
-        /// k21..k23 — TBD (the template figure carries (0,−1,0) here).
-        back_extra: [f64; 3],
-        /// §4u pins `(anchor_u, anchor_v, face_x, face_y)`, all inches in
-        /// the §4v frame; `[anchor,1]·K` reproduces `face` exactly.
-        front_pins: Vec<[f64; 4]>,
-        back_pins: Vec<[f64; 4]>,
-        /// Observed (1,0) affine-era / (0,1) pin-era / (0,3) figure — TBD.
-        flags: [u32; 2],
+        ftc: Box<Ftc>,
     },
     /// A welded/freehand curve — schema 4 (§4s addendum: theater-2017
     /// @0x56df8d; every default-template figure carries them, curve.skp
@@ -243,19 +213,95 @@ pub enum Entity {
         members: u32,
     },
     /// A definition-tail relationship record — schema 0 (§4s addendum,
-    /// REVISED on guest-house @0x1d18c1e; see [`r_crelationship`]): the
-    /// def's provenance block (GUID + name + description + source path +
-    /// timestamp) plus two object pointers.
+    /// REVISED again on a third-party apartment model; see
+    /// [`r_crelationship`]): two object pointers plus a nullable pointer to
+    /// the NEXT relationship. Relationships form a singly linked chain
+    /// hanging off the definition tail; the provenance block (GUID + name +
+    /// description + source path + timestamp) that earlier readings placed
+    /// inside this record belongs to the DEFINITION tail and follows the
+    /// chain head pointer unconditionally.
     Relationship {
         pid: u32,
-        guid: String,
+        a: Child,
+        b: Child,
+        next: Child,
+    },
+    /// A material-manager record — schema 12 (§4n, archive-walked; see
+    /// [`r_cmaterial`]): name + the texture image pointer (null on solid
+    /// materials; an inline or shared `CDib` object on textured ones).
+    Material {
+        pid: u32,
         name: String,
-        desc: String,
-        timestamp: u32,
+        dib: Child,
     },
     /// Placeholder registered before a body is read, and the value left for a
     /// class we can decode a tag for but have no body reader (a stall point).
     Other(String),
+}
+
+/// A definition's provenance block (§7.1).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct DefMeta {
+    pub name: String,
+    pub desc: String,
+    pub guid: String,
+    pub timestamp: u32,
+    /// Component behaviour (§7.1), decoded from the bytes after the
+    /// timestamp.
+    pub behaviour: crate::settings::Behaviour,
+}
+
+/// A linear dimension's payload (§10.1), boxed behind
+/// [`Entity::Dimension`].
+#[derive(Debug, Clone)]
+pub struct DimensionBody {
+    pub text_override: String,
+    pub font: Child,
+    /// `(kind, point in inches, entity)` for the start and end anchors.
+    pub anchors: [(u32, [f64; 3], Child); 2],
+    pub normal: [f64; 3],
+    pub x_axis: [f64; 3],
+    /// Inches.
+    pub offset: f64,
+    pub text_position: u32,
+    pub aligned: bool,
+}
+
+/// A text annotation's payload (§10.2), boxed behind [`Entity::Text`].
+#[derive(Debug, Clone)]
+pub struct TextBody {
+    pub content: String,
+    pub font: Child,
+    pub screen_position: [f64; 2],
+    pub anchor_kind: u32,
+    /// Inches.
+    pub anchor_point: [f64; 3],
+    pub anchor_entity: Child,
+    /// Inches for a pushpin leader, screen space otherwise.
+    pub leader_offset: [f64; 3],
+    pub leader: u32,
+    pub arrow: u32,
+}
+
+/// The per-face texture placement payload (§9), boxed behind
+/// [`Entity::FaceTextureCoords`].
+#[derive(Debug, Clone)]
+pub struct Ftc {
+    /// Front map k0..k8 (row-major 3×3, texture-in → face-local-in).
+    pub front: [f64; 9],
+    /// k9..k11 — zero on every authored user face; TBD (§4v).
+    pub front_extra: [f64; 3],
+    /// Back map k12..k20.
+    pub back: [f64; 9],
+    /// k21..k23 — TBD (the template figure carries (0,−1,0) here).
+    pub back_extra: [f64; 3],
+    /// §4u pins `(anchor_u, anchor_v, face_x, face_y)`, all inches in
+    /// the §4v frame; `[anchor,1]·K` reproduces `face` exactly.
+    pub front_pins: Vec<[f64; 4]>,
+    pub back_pins: Vec<[f64; 4]>,
+    /// Observed (1,0) affine-era / (0,1) pin-era / (0,3) figure — TBD.
+    pub flags: [u32; 2],
 }
 
 impl Entity {
@@ -315,6 +361,7 @@ impl Entity {
             Entity::FaceTextureCoords { .. } => "CFaceTextureCoords",
             Entity::Curve { .. } => "CCurve",
             Entity::Relationship { .. } => "CRelationship",
+            Entity::Material { .. } => "CMaterial",
             Entity::Other(name) => name,
         }
     }
@@ -350,11 +397,28 @@ fn entity_preamble_with_attrs(ar: &mut CArchive) -> Result<(u32, Child), Stall> 
         ar.take(2)?; // legacy: the two lead bytes (a null pointer in truth)
         Child::Null
     };
+    let pid = match pid_field(ar) {
+        Ok(pid) => pid,
+        Err(mut st) => {
+            // Rewind to the record start so the caller sees the whole body.
+            st.pos = start;
+            ar.pos = start;
+            return Err(st);
+        }
+    };
+    Ok((pid, attrs))
+}
+
+/// One §4i presence-masked pid field: `<mask:u8>` + popcount(mask) bytes,
+/// ascending significance. A mask past 0x0f (pid wider than u32) means a
+/// desynced stream: stall.
+fn pid_field(ar: &mut CArchive) -> Result<u32, Stall> {
+    let at = ar.pos;
     let mask = ar.u1()?;
     if mask > 0x0f {
         let mapindex = ar.map.len();
-        ar.pos = start;
-        return Err(Stall::new("<bad pid preamble>", start, mapindex));
+        ar.pos = at;
+        return Err(Stall::new("<bad pid preamble>", at, mapindex));
     }
     let raw = ar.take(mask.count_ones() as usize)?;
     let mut pid = 0u32;
@@ -365,7 +429,7 @@ fn entity_preamble_with_attrs(ar: &mut CArchive) -> Result<(u32, Child), Stall> 
             i += 1;
         }
     }
-    Ok((pid, attrs))
+    Ok(pid)
 }
 
 /// A class body reader.
@@ -418,6 +482,7 @@ const CONT_REGISTRY: &[(&str, std::ops::RangeInclusive<u32>, Reader)] = &[
     ("CCurve", 4..=4, r_ccurve),
     ("CRelationship", 0..=0, r_crelationship),
     ("CConstructionLine", 1..=1, r_cconstructionline),
+    ("CMaterial", 12..=12, r_cmaterial),
 ];
 
 /// Dispatch a class body reader. `Ok(None)` = no reader will run: either the
@@ -545,23 +610,25 @@ fn r_cface(ar: &mut CArchive) -> Result<Entity, Stall> {
         back_material,
         hidden,
         layer,
-        plane,
+        plane: Box::new(plane),
         loops,
         attrs,
     })
 }
 
-/// `CSkFont` schema 1 (SKP_FORMAT §4k, extent corrected): pid-less §4i
-/// preamble + utf16 name + 15-byte fixed tail (u16 + u32 height + f64
-/// size + u8). §4k's original 14 was one short: with 15, the dimension
-/// tail is a uniform 165 whether the font is inline or a back-ref — all
-/// four dims across dimension.skp/house-plus/mixed-definition share a
-/// byte-identical tail prefix (`00 01 00 00 00 02 00 00 00 04 …`) under
-/// this alignment, and the back-ref-font dims measure exactly 165 to the
-/// next record tag. (CText sites never noticed: their reader re-anchors
-/// by scanning for the pre-string signature.)
+/// `CSkFont` schema 1 (SKP_FORMAT §4k, extent corrected): §4i preamble
+/// (pid-less on every authored file — `00 00 00` — but a third-party
+/// house's dimension fonts carry pids: `00 00 03 <pid>`) + utf16 name +
+/// 15-byte fixed tail (u16 + u32 height + f64 size + u8). §4k's original
+/// 14 was one short: with 15, the dimension tail is a uniform 165 whether
+/// the font is inline or a back-ref — all four dims across
+/// dimension.skp/house-plus/mixed-definition share a byte-identical tail
+/// prefix (`00 01 00 00 00 02 00 00 00 04 …`) under this alignment, and
+/// the back-ref-font dims measure exactly 165 to the next record tag.
+/// (CText sites never noticed: their reader re-anchors by scanning for the
+/// pre-string signature.)
 fn r_cskfont(ar: &mut CArchive) -> Result<Entity, Stall> {
-    ar.take(3)?; // 00 00 00 (pid-less)
+    entity_preamble(ar)?;
     let name = ar.utf16()?;
     let t = ar.take(15)?; // bold, italic, u32 size, u8, f64 (§10.1)
     Ok(Entity::Font {
@@ -617,14 +684,16 @@ fn r_cdimensionlinear(ar: &mut CArchive) -> Result<Entity, Stall> {
     let text_position = ar.u4()?;
     Ok(Entity::Dimension {
         pid,
-        text_override,
-        font,
-        anchors,
-        normal,
-        x_axis,
-        offset,
-        text_position,
-        aligned,
+        body: Box::new(DimensionBody {
+            text_override,
+            font,
+            anchors,
+            normal,
+            x_axis,
+            offset,
+            text_position,
+            aligned,
+        }),
     })
 }
 
@@ -696,44 +765,45 @@ fn r_ctext(ar: &mut CArchive) -> Result<Entity, Stall> {
         mid.unwrap_or(([0.0; 2], 0, [0.0; 3], Child::Null, [0.0; 3], 0, 0));
     Ok(Entity::Text {
         pid,
-        content,
-        font,
-        screen_position,
-        anchor_kind,
-        anchor_point,
-        anchor_entity,
-        leader_offset,
-        leader,
-        arrow,
+        body: Box::new(TextBody {
+            content,
+            font,
+            screen_position,
+            anchor_kind,
+            anchor_point,
+            anchor_entity,
+            leader_offset,
+            leader,
+            arrow,
+        }),
     })
 }
 
 /// `CSectionPlane` schema 2 (SKP_FORMAT §4l): preamble + drawbase + plane
-/// 4×f64 and NOTHING after. section-plane.skp's plane decodes to
-/// (0, 0, -1, 19.685" = 0.5 m) — the authored mid-box horizontal cut. The
-/// old u32 tail was pinned on section-plane.skp and house-plus.skp, where
-/// the plane is the last root entity and the four "tail" bytes are the
-/// zeros opening the §4l root tail; feature-pack.skp puts the next root
-/// entity's new-class record (`FF FF`, CText) directly behind the plane.
+/// 4×f64 — nothing else. section-plane.skp's plane decodes to
+/// (0, 0, -1, 19.685" = 0.5 m), the authored mid-box horizontal cut; its
+/// "trailing u32" was the root tail's zero run behind the list's last
+/// element. A third-party house places section planes mid-definition with
+/// the definition tail hard behind them, pinning the extent.
 fn r_csectionplane(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
-    ar.take(10)?; // drawbase
+    let drawbase = ar.take(10)?; // §4q
+    let hidden = drawbase[2] != 0;
     let mut plane = [0.0f64; 4];
     for slot in plane.iter_mut() {
         *slot = ar.f8()?;
     }
-    Ok(Entity::SectionPlane { pid, plane })
+    Ok(Entity::SectionPlane { pid, plane, hidden })
 }
 
 /// `CConstructionPoint` schema 0 (SKP_FORMAT §4l): preamble + drawbase +
-/// position 3×f64 + reference point 3×f64 + u8. The construction-point.skp
+/// position 3×f64 + reference point 3×f64 + ONE tail byte. The corpus
 /// instance's position is EXACTLY the authored (1 m, 2 m, 3 m) —
-/// typed-dimension proof of the layout. The old u32 tail was pinned on
-/// that file, whose point is the last root entity and sits in a zero run
-/// the extra bytes hid in; feature-pack.skp puts the NEXT root entity's
-/// new-class record (`FF FF`, CSectionPlane) directly behind a single
-/// `01` byte and pins the tail to exactly 1 (same failure shape as the
-/// CImage phantom u32).
+/// typed-dimension proof of the layout. The tail was read as a u32 (1)
+/// while the only instance sat last in a root list, ahead of the §4l zero
+/// run; a third-party bathroom model places guide points mid-definition
+/// with the next entity's class-ref hard behind them, pinning the tail to
+/// exactly one byte (0 there, 1 in the corpus).
 fn r_cconstructionpoint(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     ar.take(10)?; // drawbase
@@ -742,7 +812,7 @@ fn r_cconstructionpoint(ar: &mut CArchive) -> Result<Entity, Stall> {
         *slot = ar.f8()?;
     }
     ar.take(24)?; // reference point 3×f64 (the tape-measure anchor)
-    ar.take(1)?; // u8 (1 in both corpus instances)
+    ar.take(1)?; // u8 flag (1 in the corpus instance, 0 mid-definition)
     Ok(Entity::ConstructionPoint { pid, point_in })
 }
 
@@ -809,7 +879,7 @@ fn r_instance_like(ar: &mut CArchive, is_group: bool) -> Result<Entity, Stall> {
     Ok(Entity::InstancePlaced {
         pid,
         defref,
-        transform,
+        transform: Box::new(transform),
         name,
         tf_at,
         hidden,
@@ -826,18 +896,27 @@ fn r_carccurve(ar: &mut CArchive) -> Result<Entity, Stall> {
     for slot in params.iter_mut() {
         *slot = ar.f8()?; // arc geometry (center/axes/radius/angles)
     }
-    Ok(Entity::ArcCurve { pid, params })
+    Ok(Entity::ArcCurve {
+        pid,
+        params: Box::new(params),
+    })
 }
 
 // ---- continuous-walk bodies (SKP_FORMAT §4s; port of tools/contwalk.py) ----
 
 /// `CLayer` schema 2 (§4s; house first decl @0x1e4765): preamble + display
-/// name + hidden:u32 + internal `Layer_<name>` + u16 + RGBA + utf16 + 21B
-/// tail (holds an f64, 0.0/0.5 observed).
+/// name + hidden:u8 + u16 + a pid-style presence mask with its bytes (§4i
+/// encoding; mask 0 on every authored file, 2–3 pid bytes on a
+/// third-party house whose layers were stamped by a plugin) + internal
+/// `Layer_<name>` + u16 + RGBA + utf16 + 21B tail (holds an f64, 0.0/0.5
+/// observed). The old "hidden:u32" reading fused the hidden byte, the u16
+/// and an empty mask — byte-identical whenever the mask is 0.
 fn r_clayer(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
     let name = ar.utf16()?;
-    let hidden = ar.u4()? != 0;
+    let hidden = ar.u1()? != 0;
+    ar.take(2)?; // u16
+    pid_field(ar)?; // secondary pid (semantics unknown)
     let _internal = ar.utf16()?;
     ar.take(2)?; // u16
     let b = ar.take(4)?;
@@ -890,72 +969,53 @@ fn r_ccomponentdefinition(ar: &mut CArchive) -> Result<Entity, Stall> {
         return Err(Stall::new("<def prelude>", ar.pos, ar.map.len()));
     }
     let count = ar.u4()? as usize;
-    if decl == 0 || count > MAX_DEF_ENTITIES {
+    // `decl` is normally the writer-side map index + 1, but third-party
+    // models (a large bathroom scene, 2017-saved) declare 0 on some
+    // definitions — a missing declaration, not a desynced stream, since
+    // the entity list and tail behind it read exactly. A zero declaration
+    // simply carries no index.
+    if count > MAX_DEF_ENTITIES {
         return Err(Stall::new("<def prelude>", ar.pos, ar.map.len()));
     }
     let mut entities = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
         entities.push(ar.read_object()?);
     }
-    // Definition tail REVISED (§4s addendum): house's "6 mystery bytes"
-    // are really `<relationship-count:u32> (count × CRelationship objects)
-    // <u16>` — house counts 0; theater's "Group#119" @0x57eec4 carries 1
-    // (missing it cost exactly 2 map slots: class + object).
-    let nrel = ar.u4()? as usize;
-    if nrel > 4096 {
+    // Definition tail REVISED (§4s addendum, third revision): `<u32> <one
+    // NULLABLE object pointer: the head of a CRelationship chain> <GUID(16)>
+    // <name> <description> <source path> <u32 UNIX timestamp>`. house's
+    // "6 mystery bytes" are the u32 (0) + a null head pointer; theater's
+    // "Group#119" and the guest-house library components carry u32 1 + an
+    // inline CRelationship whose `next` is null; a third-party apartment
+    // model carries u32 1 + a TWO-node chain (the head's `next` inlines a
+    // second CRelationship). The provenance block always follows the head
+    // pointer — the earlier "definition provenance is optional when a
+    // relationship carries it" rule was this same layout misread with the
+    // block inside the relationship record.
+    let rel_flag = ar.u4()?;
+    if rel_flag > 4096 {
         return Err(Stall::new("<def relationships>", ar.pos, ar.map.len()));
     }
-    // A relationship duplicates the def's provenance block (GUID + name +
-    // desc + timestamp); keep the last one as the fallback metadata source.
-    let mut rel_meta: Option<(String, String, String, u32)> = None;
-    for _ in 0..nrel {
-        if let Child::Obj(i) = ar.read_object()? {
-            if let crate::carchive::Slot::Object(Entity::Relationship {
-                guid,
-                name,
-                desc,
-                timestamp,
-                ..
-            }) = &ar.map[i]
-            {
-                rel_meta = Some((guid.clone(), name.clone(), desc.clone(), *timestamp));
-            }
-        }
-    }
-    ar.take(2)?; // u16
-                 // The def's own provenance block is OPTIONAL when a relationship
-                 // carries it (theater "Group#119", guest-house library components):
-                 // present iff the name-string marker sits right behind the 16-byte
-                 // GUID slot. Absent, the metadata comes from the relationship and the
-                 // stream continues straight into the (unpinned) midtail.
-    let own_tail =
-        ar.d.get(ar.pos + 16..ar.pos + 19)
-            .is_some_and(|w| w == b"\xff\xfe\xff");
-    let (guid, name, desc, timestamp) = match rel_meta {
-        Some(meta) if !own_tail => meta,
-        _ => {
-            let guid_bytes = ar.take(16)?;
-            let guid: String = guid_bytes.iter().map(|b| format!("{b:02x}")).collect();
-            let name = ar.utf16()?;
-            let desc = ar.utf16()?;
-            ar.utf16()?;
-            let timestamp = ar.u4()?;
-            (guid, name, desc, timestamp)
-        }
-    };
+    ar.read_object_expect("CRelationship")?; // chain head (nullable)
+    let guid_bytes = ar.take(16)?;
+    let guid: String = guid_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let name = ar.utf16()?;
+    let desc = ar.utf16()?;
+    ar.utf16()?; // source path (library provenance)
+    let timestamp = ar.u4()?;
     // Behaviour (§7.1): after the timestamp come a u32 and 24 bytes, then
     // u8 glues, u8 cuts, u32 plane, u8 bits (1 faces the camera, 2 shadows
-    // face the sun). Only read when the definition carries its own tail.
+    // face the sun).
     let p = ar.pos;
-    let behaviour = match (own_tail, ar.d.get(p + 28..p + 35)) {
-        (true, Some(b)) => crate::settings::Behaviour {
+    let behaviour = match ar.d.get(p + 28..p + 35) {
+        Some(b) => crate::settings::Behaviour {
             glues_to_surface: b[0] != 0,
             cuts_opening: b[1] != 0,
             glue_plane: u32::from_le_bytes([b[2], b[3], b[4], b[5]]),
             always_faces_camera: b[6] & 1 != 0,
             shadows_face_sun: b[6] & 2 != 0,
         },
-        _ => Default::default(),
+        None => Default::default(),
     };
     // Midtail: scan for the thumbnail structurally (§4s: the block between
     // the timestamp and the thumbnail varies 42–47 bytes and is not pinned).
@@ -982,14 +1042,16 @@ fn r_ccomponentdefinition(ar: &mut CArchive) -> Result<Entity, Stall> {
     ar.read_object()?; // the CThumbnail
     Ok(Entity::ComponentDef {
         pid,
-        name,
-        desc,
-        guid,
-        decl_index: decl - 1,
+        meta: Box::new(DefMeta {
+            name,
+            desc,
+            guid,
+            timestamp,
+            behaviour,
+        }),
+        decl_index: decl.saturating_sub(1),
         count,
         entities,
-        timestamp,
-        behaviour,
     })
 }
 
@@ -1069,6 +1131,13 @@ fn attr_value(ar: &mut CArchive, t: u8, depth: u32) -> Result<(), Stall> {
         0x0c => {
             ar.take(8)?;
         }
+        // 3×f64 point/vector (a third-party house's "FredoTools_ThruPaint"
+        // dict, key "i_r": a 4-element array of them, each element carrying
+        // its own 0x11 type byte; the next key's string marker sits exactly
+        // 24 bytes behind each).
+        0x11 => {
+            ar.take(24)?;
+        }
         0x0b => {
             let n = ar.u4()? as usize;
             if n > 1_000_000 || depth > 8 {
@@ -1147,13 +1216,15 @@ fn r_cfacetexturecoords(ar: &mut CArchive) -> Result<Entity, Stall> {
     let [front_pins, back_pins] = pins;
     Ok(Entity::FaceTextureCoords {
         pid,
-        front: k[0..9].try_into().unwrap(),
-        front_extra: k[9..12].try_into().unwrap(),
-        back: k[12..21].try_into().unwrap(),
-        back_extra: k[21..24].try_into().unwrap(),
-        front_pins,
-        back_pins,
-        flags,
+        ftc: Box::new(Ftc {
+            front: k[0..9].try_into().unwrap(),
+            front_extra: k[9..12].try_into().unwrap(),
+            back: k[12..21].try_into().unwrap(),
+            back_extra: k[21..24].try_into().unwrap(),
+            front_pins,
+            back_pins,
+            flags,
+        }),
     })
 }
 
@@ -1174,9 +1245,7 @@ fn r_cconstructionline(ar: &mut CArchive) -> Result<Entity, Stall> {
     ar.take(4)?; // tail (zeros observed)
     Ok(Entity::ConstructionLine {
         pid,
-        point_in: [v[0], v[1], v[2]],
-        direction: [v[3], v[4], v[5]],
-        bounds: [v[6], v[7]],
+        params: Box::new(v),
     })
 }
 
@@ -1193,34 +1262,79 @@ fn r_ccurve(ar: &mut CArchive) -> Result<Entity, Stall> {
     Ok(Entity::Curve { pid, members })
 }
 
-/// `CRelationship` schema 0 (§4s addendum, REVISED on guest-house
-/// @0x1d18c1e): preamble + TWO OBJECT POINTERS (short back-ref words on
-/// theater — the old reading's "u32 0x27ac353e" was really `3e 35` +
-/// `ac 27`, byte-identical; the `7F FF` + u32 big-object escape on giant
-/// maps) + u16 + GUID(16) + name + desc + source path + u32 UNIX
-/// timestamp. The record mirrors the definition tail's provenance block —
-/// theater's "Group#119" def name had in fact been read out of ITS
-/// relationship by the old frame-shifted tail (the structural thumbnail
-/// scan absorbed the drift); [`r_ccomponentdefinition`] now takes the
-/// def metadata from here when the def's own tail block is absent.
+/// `CRelationship` schema 0 (§4s addendum, REVISED twice): preamble + TWO
+/// OBJECT POINTERS (short back-ref words on theater — the old reading's
+/// "u32 0x27ac353e" was really `3e 35` + `ac 27`; the `7F FF` + u32
+/// big-object escape on giant maps) + a NULLABLE OBJECT POINTER to the next
+/// relationship in the chain. On every corpus instance the next pointer is
+/// null (`00 00`), which the guest-house-era reading took for a u16 ahead of
+/// a provenance block; a third-party apartment model puts an inline
+/// class-ref there — a second CRelationship — followed by the definition's
+/// provenance block, which is therefore the DEFINITION tail's and not this
+/// record's (see [`r_ccomponentdefinition`]).
 fn r_crelationship(ar: &mut CArchive) -> Result<Entity, Stall> {
     let pid = entity_preamble(ar)?;
-    ar.read_object()?; // object pointer A
-    ar.read_object()?; // object pointer B
-    ar.take(2)?; // u16
-    let guid_bytes = ar.take(16)?;
-    let guid: String = guid_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let a = ar.read_object()?; // object pointer A
+    let b = ar.read_object()?; // object pointer B
+    let next = ar.read_object_expect("CRelationship")?; // chain link
+    Ok(Entity::Relationship { pid, a, b, next })
+}
+
+/// `CMaterial` schema 12 (§4n, §8.1) as the tagged list element it is:
+/// preamble (the attribute pointer carries renderer-plugin dictionaries —
+/// V-Ray's "VRayInfo"/"VRayPlugins" on a third-party bathroom model) +
+/// name + `u8` textured flag + [textured: a NULLABLE attribute-container
+/// pointer for the texture itself (null on every authored file; a
+/// "VRayTextureHelper" dictionary on a third-party house's "Two Sided"
+/// material)] + `u8` (0 observed) + [textured: CDib object pointer
+/// (inline new-class/class-ref, or a back-ref to another material's dib
+/// when the image is shared) + an optional u32 after JPEG payloads +
+/// applied size w,h f64 + filename + average RGBA + u8] + RGBA + utf16 +
+/// 8 bytes + opacity f64 + use-opacity flag u8. The material list is
+/// `<count:u32>` + count tagged records (record 0 declares the class);
+/// the byte-scan walker's "holder pointer + attribute objects + trailer"
+/// tail was this framing read out of phase — the next record's class-ref
+/// tag plus its `00 00 00` preamble — which broke on the first record
+/// with a non-null attribute pointer. The earlier "u16 flag + u16 0"
+/// reading of the textured head was `u8 1 + null pointer + u8 0` — byte
+/// identical until the pointer is non-null.
+fn r_cmaterial(ar: &mut CArchive) -> Result<Entity, Stall> {
+    let pid = entity_preamble(ar)?;
     let name = ar.utf16()?;
-    let desc = ar.utf16()?;
-    ar.utf16()?; // source path (library provenance)
-    let timestamp = ar.u4()?;
-    Ok(Entity::Relationship {
-        pid,
-        guid,
-        name,
-        desc,
-        timestamp,
-    })
+    let textured = ar.u1()?;
+    let mut dib = Child::Null;
+    match textured {
+        0 => {
+            ar.take(1)?; // u8 (0 observed)
+        }
+        1 => {
+            ar.read_object_expect("CAttributeContainer")?; // texture attributes
+            ar.take(1)?; // u8 (0 observed)
+            dib = ar.read_object_expect("CDib")?;
+            // JPEG payloads carry a trailing u32 (70/99 observed): the
+            // filename marker sits 16 bytes past here without it, 20 with.
+            let p = ar.pos;
+            if ar.d.get(p + 20..p + 23) == Some(b"\xff\xfe\xff") {
+                ar.take(4)?;
+            } else if ar.d.get(p + 16..p + 19) != Some(b"\xff\xfe\xff") {
+                return Err(Stall::new("<material texture tail>", p, ar.map.len()));
+            }
+            ar.take(16)?; // applied size w, h (inches)
+            ar.utf16()?; // texture filename
+            ar.take(4)?; // average RGBA
+            ar.take(1)?;
+        }
+        _ => return Err(Stall::new("<material texture flag>", ar.pos, ar.map.len())),
+    }
+    ar.take(4)?; // RGBA (solid color; textured: second average color)
+    let empty = ar.utf16()?;
+    if !empty.is_empty() {
+        return Err(Stall::new("<material tail>", ar.pos, ar.map.len()));
+    }
+    ar.take(8)?;
+    ar.f8()?; // opacity slider value
+    ar.take(1)?; // use-opacity flag
+    Ok(Entity::Material { pid, name, dib })
 }
 
 #[cfg(test)]

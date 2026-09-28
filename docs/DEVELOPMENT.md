@@ -111,6 +111,19 @@ The current test suite is the acceptance record
 - Every remaining unknown byte range is catalogued in `SKP_FORMAT.md`
   §15.
 
+Beyond the corpus, `crates/openskp/tests/external_models.rs` is an
+opt-in check against production-scale third-party `.skp` files that
+cannot be redistributed and must never be added to the repository or
+corpus. Point `OPENSKP_EXTERNAL_MODELS` at a local directory of them —
+
+```sh
+OPENSKP_EXTERNAL_MODELS=/path/to/models cargo test --workspace --release
+```
+
+— and every 2017 file there must read on the continuous walk with no
+desync, and every `<name> (2026).skp` next to a `<name>.skp` must read
+equivalent to it. Unset (the default), the test passes vacuously.
+
 ## Parked / future work
 
 Roughly in order of likely value:

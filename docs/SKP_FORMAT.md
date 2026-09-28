@@ -150,16 +150,21 @@ model section:
   CComponentDefinition × N      trailing definitions, back-to-back
   <count:u32>                   THE ROOT ENTITY LIST (the model's own
                                 entities: groups, instances, loose geometry)
-root tail: 00 00 00 00 + u32 + 00 + u32 + 00 +
+root tail: u32 + <pointer> + <pointer> + 00 + u32 + 00 +
            geo-location strings (city, country) + latitude/longitude f64  [§4l]
+page list: CViewPage × N (the scenes, §10.6) — after the root record,
+           not in the pre-model manager region
 ```
 
 The exact composition of the pre-model region is not specified — a reader
 reaches the model section via the calibration anchors of §3.2 rather than
 by decoding every manager. The root list ends exactly where the root tail
-begins on every 2017 corpus file: four zero bytes, a u32 (non-zero only in
-the three files holding a section plane — candidate: a reference to the
-active plane), a zero byte, a u32 (`58 79 F0 6A` in every authored file,
+begins on every 2017 corpus file: a u32 (0 in every corpus file, 1 in a
+third-party house), two nullable object pointers (the first is a
+back-reference in the three corpus files holding a section plane —
+candidate: the active plane — and, in that house, a new `CRelationship`
+object (§7.1) written inline; the second is null in every observed
+file), a zero byte, a u32 (`58 79 F0 6A` in every authored file,
 `58 BC CB 3D` in theater-2017; meaning undecoded), a zero byte, then the
 utf16 city string (`FF FE FF` at +14). The walk reads a counted list, so
 a mis-sized body can still "complete" it on misread elements without a
@@ -232,7 +237,8 @@ A **definition's** list carries a longer prelude:
 
 `decl − 1` is the owning definition's writer-side map index — normally
 equal to the read-side slot, but stale when purged slots shifted the
-numbering (§3.2).
+numbering (§3.2), and `0` (no index declared) on some definitions of
+third-party models; the list and tail behind such a prelude read exactly.
 
 ## 6. Geometry kernel [§4c–§4f]
 
@@ -306,12 +312,12 @@ u32             layer count, then that many CLayer objects (each definition
                  carries its own copy of the default layer)
 list prelude    (§5.3) + entity list
 tail:
-  u32           relationship count, then count × CRelationship  [§4t]
-  u16
+  u32           (0 with no relationships, 1 otherwise; semantics unconfirmed)
+  <pointer>     nullable object pointer: the head of a CRelationship chain  [§4t]
   16 bytes      GUID
   utf16         name
   utf16         description
-  utf16
+  utf16         source path (library provenance; empty on authored files)
   u32           UNIX timestamp (publish/save date) [0x1581]
   u32           [0x1582]: 0 or 1 in the converted models, where it
                 equals 0x1582; 0x301 was also observed
@@ -326,6 +332,14 @@ tail:
   3–8 bytes     (undecoded; zero)
   CThumbnail    object
 ```
+
+`CRelationship` (schema 0) is a chain node: preamble + two object
+pointers + a nullable pointer to the next relationship. Every authored
+file's node has a null next pointer; a third-party apartment model chains
+two. The provenance block (GUID through timestamp) belongs to the
+definition tail and always follows the head pointer — an earlier reading
+placed it inside the relationship record and made the definition's own
+block "optional", which was this layout read out of phase.
 
 The component behaviour (brackets: the post-2017 record, §16.5) is
 pinned by SketchUp Make 2017 pairs editing the stock figure's
@@ -365,6 +379,13 @@ down the instance tree.
 
 ### 8.1 CMaterial [§4e, §4f]
 
+The material manager's list is `<count:u32>` + count tagged records —
+record 0 is the `CMaterial` new-class declaration, later records
+class-refs — and each record opens with the §5.1 entity preamble (a
+non-null attribute pointer carries renderer-plugin dictionaries, e.g.
+V-Ray's "VRayInfo"/"VRayPlugins"; pids are stored on some files). The
+body after the preamble:
+
 Brackets give the post-2017 `material.xml` attribute (§16.6) with the
 same value in the conversions of `theater`, `feature-pack`,
 `house-plus` and `box` (103 materials).
@@ -373,9 +394,10 @@ Solid material:
 
 ```
 utf16 name      (library/bundled names are bracketed: "[Wood Floor Light]")
-u16   0         (no texture)
+u8    0         (no texture)
+u8    0
 4 bytes         RGBA, one byte each, in that order     [colorRed/Green/Blue]
-utf16           empty in every observed file
+utf16           texture path (empty in every observed file)
 u32             type: 0 solid                          [type]
 u32             colorize type                          [colorizeType]
 f64             opacity 0..1 — the opacity slider's last position; it
@@ -391,13 +413,19 @@ Textured material:
 
 ```
 utf16 name
-u32   1                    has-texture flag
-<texture image>            EITHER an inline CDib object (class ref + body,
-                           §8.2), OR a u16 back-ref holding the owning
-                           material's CDib GLOBAL map slot — image data is
-                           deduplicated across materials sharing a texture
-                           (house.skp: "[Wood Floor Light]1" refs 23, the
-                           slot after "[Wood Floor Light]" at 22) [§4s]
+u8    1                    has-texture flag
+<pointer>                  nullable object pointer: the texture's own
+                           attribute container (null on every authored
+                           file; a "VRayTextureHelper" dictionary on a
+                           third-party house's "Two Sided" material)
+u8                         (0 observed)
+<texture image>            an MFC object pointer: EITHER an inline CDib
+                           object (class ref + body, §8.2), OR a back-ref
+                           to the owning material's CDib GLOBAL map slot —
+                           image data is deduplicated across materials
+                           sharing a texture (house.skp: "[Wood Floor
+                           Light]1" refs 23, the slot after "[Wood Floor
+                           Light]" at 22) [§4s]
 (JPEG payloads only) u32   JPEG quality (the post-2017 `0x32cd`, §16.6)
 f64 × 2                    applied texture size: width, height in inches
                            [texture xScale, yScale]
@@ -423,6 +451,11 @@ u32 is 1. The conversion recomputes some texture average colours. Three
 texture's average is re-derived from its image. Every other field
 matches exactly.
 
+The record ends at the flag byte; the next record's tag follows
+directly. The material region's slot arithmetic is therefore exact on an
+archive walk: the `CLayer` class occupies slot `base + 1` (§3.2), so
+the slots the material list consumes count back from there.
+
 ### 8.2 CDib (schema 3)
 
 ```
@@ -439,7 +472,10 @@ thumbnails.
 ```
 preamble
 utf16   display name                                   [0x3c8d]
-u32     hidden flag                                    [0x3c8e]
+u8      hidden flag                                    [0x3c8e]
+u16     0 in every observed layer
+<pid>   a second §5.1 presence-masked pid field (mask 0 on authored files;
+        2–3 bytes on a third-party house whose layers a plugin stamped)
 utf16   internal name ("Layer_<name>")                 [0x3c8f material name]
 2 bytes 00 01 in every observed layer
 4 bytes RGBA layer colour                              [colorRed/Green/Blue]
@@ -575,7 +611,7 @@ CDimensionLinear:
   u32                   0 in every observed anchor               [0x520c] (candidate)
 
 CSkFont:
-  pid-less preamble (mask 0)
+  preamble (mask 0 on authored files; third-party dimension fonts carry pids)
   utf16 name ("Tahoma")                                          [0x5015]
   u8, u8                bold, italic (0 in every file)           [0x5016, 0x5017] (candidate order)
   u32                   size in points                           [0x5018]
@@ -618,9 +654,11 @@ the string by them.
 
 **CConstructionPoint** (schema 0): preamble + drawbase + 3 × f64 position
 + 3 × f64 reference (tape-measure anchor) point + u8 (`01` in both corpus
-instances). In feature-pack.skp the section plane's new-class record
-follows the u8 directly; construction-point.skp's point is the last root
-entity, so a u32 reading there only swallows root-tail zeros.
+instances; 0 in a third-party bathroom model's mid-definition points,
+whose next entity's class-ref pins the extent). In feature-pack.skp the
+section plane's new-class record follows the u8 directly;
+construction-point.skp's point is the last root entity, so a u32 reading
+there only swallows root-tail zeros.
 
 **CConstructionLine** (schema 1, guides): preamble + drawbase + 3 × f64
 anchor + 3 × f64 unit direction + 2 × f64 line-parameter bounds (±1.0e30
@@ -628,11 +666,13 @@ exactly = the infinite-guide sentinel) + 4 zero bytes (feature-pack.skp:
 the guide point's new-class record follows directly).
 
 **CSectionPlane** (schema 2): preamble + drawbase + 4 × f64 plane
-(A, B, C, D), nothing after. feature-pack.skp's plane (0, 1, 0, 0) — the
-front face of the authored box — is followed directly by a CText
-new-class record; in section-plane.skp and house-plus.skp the plane is
-the last root entity and the four zero bytes behind it open the root
-tail.
+(A, B, C, D), nothing after; the plane is in the owning entity list's
+local frame (unit normal + offset, inches). feature-pack.skp's plane
+(0, 1, 0, 0) — the front face of the authored box — is followed directly
+by a CText new-class record; in section-plane.skp and house-plus.skp the
+plane is the last root entity and the four zero bytes behind it open the
+root tail; a third-party house's mid-definition planes are followed
+directly by the definition tail.
 
 ### 10.4 CImage (schema 1) [§4l]
 
@@ -651,8 +691,9 @@ dictionary name + entries `[utf16 key + type:u8 + value]` terminated by
 an empty-string key, + u32.
 
 Value types: `0x00` nil (no bytes), `0x04` i32, `0x06` f64, `0x07` bool
-(u8), `0x0A` utf16 string, `0x0B` typed array (u32 count + element type
-u8 + values, recursive).
+(u8), `0x0A` utf16 string, `0x0B` typed array (u32 count, then per
+element a type u8 + value, recursive), `0x0C` an 8-byte scalar, `0x11` a
+3 × f64 point/vector (a plugin dictionary on a third-party house).
 
 Dictionaries carry model options (units, snap settings), geo-location,
 and dynamic-component parameters.
@@ -660,7 +701,9 @@ and dynamic-component parameters.
 ### 10.6 View records
 
 **CThumbnail** (schema 1): preamble + CCamera object + nullable CDib
-(the preview image). **CCamera** (schema 5): no preamble — 137 raw bytes,
+(the preview image); the document's first CThumbnail is the preview and
+its camera is the **saved view** (it matches the COLLADA export's
+"Last_Saved_SketchUp_View" camera). **CCamera** (schema 5): no preamble — 137 raw bytes,
 u16 (1), utf16 description, 33-byte tail. Each field is the post-2017
 camera record in brackets (§16.9):
 
@@ -680,8 +723,8 @@ SketchUp Make 2017 pairs switching to parallel projection and to
 two-point perspective pin `+88`, `+97` and tail `+8`; the document
 camera of every corpus model decodes to its post-2017 conversion's
 values field for field. Scene records (`CViewPage`) are in §10.10.
-**CRelationship** (schema 0): preamble + u32 (value semantics unknown);
-appears in definition tails [§4t].
+**CRelationship** (schema 0): see §7.1 — a chain node in definition
+tails [§4t].
 
 ### 10.7 Rendering options
 
@@ -870,14 +913,16 @@ if bit 2:  3 bytes | the 206 rendering fields at §10.7's +0…+205 [0x714d]
 if bit 4:  shadow info (§10.9)                      [0x714e]
 if bit 8:  axes, 110 bytes                          [0x714f]
 if bit 16: u32 n | n object references             [0x714b]
-if bit 32: u32 n | n object references             [0x7150 / 0x7159]
+if bit 32: u32 n | n object references             [0x7150]
 if bit 64: u32 n | n object references             [0x7151]
 u8               included in animation              [0x7152]
 f64              −1 in every observed file          [0x7154]
 f64              −1 in every observed file          [0x7155]
 u8, u8           0 in every observed file
-u8, u8           has a thumbnail, stored twice      [0x7157]
-if set:    u8 (1) | u32 length | PNG image          [0x7158]
+u8, u8           has a thumbnail; thumbnail inline  [0x7157]
+if 01 01:  u8 (1) | u32 length | PNG image          [0x7158]
+if 01 00:  object pointer to a thumbnail stored earlier (a third-party
+           house; big-tag back-references)
 ```
 
 The axes are a drawing element: a preamble with a null attribute
@@ -885,9 +930,10 @@ pointer and pid mask 0, then a drawbase (§5.2). Next come the origin and
 the x, y and z axis directions (4 × 3 f64, `0x4651`–`0x4654`), and a u8
 that is 1 in every file. Bits 128 and above add no fields. The three
 lists match the post-2017 id lists in length. The bit-16 list holds the
-hidden entities (**candidate**), and the bit-64 list the active section
-planes. The bit-32 list was empty in every file, so whether it pairs
-with `0x7150` or `0x7159` is open. The scenes added through the Scenes
+hidden entities (**candidate**), the bit-32 list the hidden layers
+(references to CLayer objects: 1, 3, 3 and 4 in a third-party bathroom
+model's four scenes, matching its conversion's `0x7150` lists), and the
+bit-64 list the active section planes. The scenes added through the Scenes
 panel in these pairs save bits 1–64 only and store no thumbnail. The
 post-2017 scene record omits the same fields when their property is not
 saved.
@@ -1002,18 +1048,21 @@ Unknown bytes inside otherwise-exact records:
 
 - CFaceTextureCoords: the leading u32; the per-side trailing f64 triples;
   the two flag u32s (§9.1).
-- CComponentDefinition: the 22-byte base; the f32 after the tail
-  timestamp and the bytes after the behaviour (§7.1).
+- CComponentDefinition: the 22-byte base; the u32 before the
+  relationship pointer; the f32 after the tail timestamp and the bytes
+  after the behaviour (§7.1).
 - CCamera: body bytes 105–136 and the fields marked undecoded in §16.9
   (§10.6).
-- CLayer: the two bytes after the internal name (§8.3).
+- CLayer: the two bytes after the internal name; the second pid field's
+  role (§8.3).
 - Drawbase bytes [3..5) and [7] (§5.2).
-- CCurve's u8; CRelationship's u32 (§6.4, §10.6).
+- CCurve's u8; CRelationship's two object pointers (§6.4, §7.1).
 - CConstructionLine's 4-byte tail; CConstructionPoint's u8 (§10.3).
 - CDimensionLinear and CText: the constant fields and single-valued
   candidates marked in §10.1 and §10.2; the anchor's u32 (4) and u16.
 - Materials: the byte between the two textured colours and the empty
-  string (§8.1).
+  string; the texture's attribute-container pointer beyond the one
+  plugin dictionary observed (§8.1).
 - CDib subtypes other than 1 and 4, if any exist (§8.2).
 - CSkpStyle: the 3 leading bytes, the empty string and the u32 (3);
   CWatermark: the leading u32 (0) — constant in every file (§10.8).
@@ -1030,7 +1079,7 @@ remains undecoded (§10.3, §10.4).
 
 Never observed as entity-list elements: CDimensionRadial, CPolyline3d,
 CComponentBehavior, CComponent, and the pre-model manager records
-(CRenderingOptions, CShadowInfo, style and page managers) — scene names
+(CRenderingOptions, CShadowInfo, style and page managers) — scene records
 and option dictionaries are recoverable by signature scans without them.
 
 Narrow-oracle semantics: the horizontal-face frame rule (§9.2) is
@@ -1539,7 +1588,8 @@ selected scene's id. A scene `0x7148`:
 | `0x714d` | rendering options `0x733c` (§16.10) |
 | `0x714e` | shadow info `0x6590` (§16.11) |
 | `0x714f` | axes `0x4650` (§16.3) |
-| `0x7150`, `0x7159` | layer id lists, present while bit 32 is set |
+| `0x7150` | hidden layer id list, present while bit 32 is set (1, 3, 3 and 4 layers in a third-party bathroom model's scenes, as its 2017 original) |
+| `0x7159` | id list, present while bit 32 is set; empty in every observed file |
 | `0x7151` | id list: active section planes |
 | `0x7152` | u8: included in animation |
 | `0x7153` | display name: the name, or `(name)` when excluded from animation |
@@ -1614,7 +1664,7 @@ This table is machine-checked against `CVersionMap` by
 | CDimensionLinear | 6 | entity lists | Full | exact extent; tail fields undecoded (§10.1) |
 | CDimensionRadial | 2 | entity lists (expected) | Resync | not in corpus |
 | CText | 9 | entity lists | Full | both variants; exact extent (§10.2) |
-| CSectionPlane | 2 | entity lists | Full | plane equation; exact extent (§10.3) |
+| CSectionPlane | 2 | entity lists | Full | plane equation in the list's local frame; exact extent (§10.3) |
 | CImage | 1 | entity lists | Skip | exact extent; pixel linkage undecoded (§10.4) |
 | CConstructionLine | 1 | entity lists | Full | guides (§10.3) |
 | CConstructionPoint | 0 | entity lists | Full | typed-dimension proven (§10.3) |
@@ -1628,7 +1678,7 @@ This table is machine-checked against `CVersionMap` by
 | CComponentBehavior | 5 | definition records | manager | |
 | CComponent | 11 | definition-record family | manager | |
 | CDefinitionList | 0 | manager | manager | |
-| CMaterial | 12 | material manager | manager | extractor-decoded (§8.1) |
+| CMaterial | 12 | material manager | Full | archive-walked list record (§8.1) |
 | CMaterialManager | 4 | manager | manager | count-prefixed list (§8.4) |
 | CTexture | 6 | inside materials | manager | applied size decoded (§8.1) |
 | CDib | 3 | textures, thumbnails | Full | subtype + length + payload (§8.2) |
@@ -1643,13 +1693,13 @@ This table is machine-checked against `CVersionMap` by
 | CPageList | 1 | manager | manager | scene names by signature (§10.6) |
 | CSketchUpPage | 1 | pages | manager | never observed; scenes are CViewPage (§10.10) |
 | CViewPage | 12 | pages | manager | scenes (§10.10) |
-| CCamera | 5 | views, thumbnails | Skip | exact 176-byte extent (§10.6) |
+| CCamera | 5 | views, thumbnails | Full | eye/target/up/projection/field of view (§10.6) |
 | CRenderingOptions | 36 | document options | manager | |
 | CShadowInfo | 7 | document options | manager | the shadow record is §10.9 (**candidate** attribution) |
 | CBackgroundImage | 10 | document/style | manager | |
 | CWatermark | 1 | style region | manager | §10.8 |
 | CWatermarkManager | 2 | manager | manager | |
-| CRelationship | 0 | definition tails | Full | u32 value; semantics unknown (§10.6) |
+| CRelationship | 0 | definition tails | Full | chain node: two pointers + next (§7.1) |
 | CRelationshipMap | 0 | manager | manager | |
 | CSketchCS | 0 | document | manager | never observed |
 | CSketchUpModel | 26 | document root | manager | root list found structurally (§4) |

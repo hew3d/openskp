@@ -23,6 +23,11 @@ const W_CLASS: u16 = 0x8000;
 const W_BIG_OBJ: u16 = 0x7FFF;
 const DW_BIG_CLASS: u32 = 0x8000_0000;
 
+/// The stall class raised when the store map cannot grow (see
+/// [`CArchive::push_slot`]); `Model::parse` turns it into a hard error
+/// rather than a legacy-path fallback, which would only fail the same way.
+pub const OUT_OF_MEMORY: &str = "<out of memory>";
+
 /// Raised when the walker reaches a class with no registered body reader, or
 /// runs off the end of the stream. Carries the exact resume point — this is the
 /// decode-as-you-go worklist / the signal to stop a geometry run.
@@ -164,6 +169,14 @@ pub struct CArchive<'a> {
     /// Every pad-slot class binding taken (slot, class) — calibration
     /// evidence, surfaced as diagnostics by the continuous walk.
     pub bound: Vec<(usize, String)>,
+    /// A throwaway walk (§4s calibration; the material-region walk): the
+    /// map is not padded, so its indexes are meaningless — a class-ref
+    /// into the pre-model region lands past the map's end or on an
+    /// unrelated throwaway slot. With a read-site expectation such a ref
+    /// resolves by that expectation WITHOUT recording a binding (the map
+    /// is discarded afterwards). The real walk re-resolves every pointer
+    /// against the padded map.
+    pub calibrating: bool,
     depth: u32,
 }
 
@@ -183,6 +196,7 @@ impl<'a> CArchive<'a> {
             continuous: false,
             expect: None,
             bound: Vec::new(),
+            calibrating: false,
             depth: 0,
         }
     }
@@ -197,6 +211,18 @@ impl<'a> CArchive<'a> {
             ar.map.push(Slot::Pad);
         }
         ar
+    }
+
+    /// Append a store-map slot, or stall with [`OUT_OF_MEMORY`] when the
+    /// allocator refuses the growth: on a 32-bit wasm kernel a
+    /// multi-million object model can exhaust the address space, and a
+    /// stall is a typed failure where an infallible push would trap.
+    fn push_slot(&mut self, slot: Slot, at: usize) -> Result<(), Stall> {
+        if self.map.try_reserve(1).is_err() {
+            return Err(Stall::new(OUT_OF_MEMORY, at, self.map.len()));
+        }
+        self.map.push(slot);
+        Ok(())
     }
 
     // ---- primitives (bounds-checked: OOB stalls instead of panicking) ----
@@ -367,7 +393,7 @@ impl<'a> CArchive<'a> {
             self.seen_schemas
                 .insert(String::from_utf8_lossy(raw).into_owned(), schema);
             let name = String::from_utf8_lossy(raw).into_owned();
-            self.map.push(Slot::Class(name.clone()));
+            self.push_slot(Slot::Class(name.clone()), start)?;
             self.classes.push(name.clone());
             self.class_depths.push(self.depth);
             name
@@ -393,6 +419,10 @@ impl<'a> CArchive<'a> {
                             self.bound.push((idx, e.to_string()));
                             e.to_string()
                         }
+                        // Calibration only: a pre-model ref past the unpadded
+                        // map (a first layer carrying an attribute container,
+                        // as third-party models with plugin-stamped layers do).
+                        (_, Some(e)) if self.calibrating => e.to_string(),
                         _ => {
                             self.pos = start;
                             let mut st = Stall::new(format!("<class-ref #{idx}>"), start, idx);
@@ -449,7 +479,7 @@ impl<'a> CArchive<'a> {
         // register the object BEFORE its body (cycle-safe: back-refs to it during
         // the body read resolve to this slot, matching MFC / the Python reference)
         let obj_index = self.map.len();
-        self.map.push(Slot::Object(Entity::Other(name.clone())));
+        self.push_slot(Slot::Object(Entity::Other(name.clone())), start)?;
 
         match read_body(self, &name) {
             Ok(Some(entity)) => {
@@ -782,5 +812,21 @@ mod skip_tests {
         let err = ar.read_object_outcome().unwrap_err();
         assert_eq!(err.class, "CFake");
         assert!(ar.skipped.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod slot_size {
+    /// The store map holds one slot per archive object — tens of millions
+    /// on a production model — so the slot must stay small: every large
+    /// entity payload lives behind a box.
+    #[test]
+    fn a_map_slot_stays_at_64_bytes() {
+        let (slot, entity) = (
+            std::mem::size_of::<super::Slot>(),
+            std::mem::size_of::<crate::entity::Entity>(),
+        );
+        eprintln!("size_of Slot = {slot}, Entity = {entity}");
+        assert!(slot <= 64, "Slot is {slot} bytes");
     }
 }

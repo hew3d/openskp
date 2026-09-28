@@ -652,6 +652,8 @@ pub fn component_tree(
     let instances = insts
         .iter()
         .map(|i| Instance {
+            pid: 0,
+            slot: None,
             definition: link.get(&i.defref).map(|&k| defs[k].name.clone()),
             defref: i.defref as u32,
             offset: i.off,

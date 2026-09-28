@@ -48,6 +48,74 @@ pub(crate) struct MatSlot {
     pub dib_rel: Option<usize>,
 }
 
+/// Walk the CMaterial region of `d` as the tagged object list it is
+/// (`entity::r_cmaterial`), with a throwaway archive whose pre-model
+/// class-refs bind by read-site expectation. Returns per-material
+/// ABSOLUTE global map slots: the region ends at the layer list, whose
+/// `CLayer` class occupies slot `base + 1` (§4s), so the slots the walk
+/// consumed count back from there. `None` on any structural surprise (a
+/// stall, a non-material element, or the walk not ending at the layer
+/// list) — the caller falls back to the byte-scan walk below.
+pub(crate) fn walk_archive(d: &[u8], base: usize) -> Option<Vec<MatSlot>> {
+    use crate::carchive::{CArchive, Child, Slot};
+    use crate::entity::Entity;
+    let decl = find(d, b"\x09\x00CMaterial")?;
+    if decl < 8 || &d[decl - 4..decl - 2] != b"\xff\xff" {
+        return None;
+    }
+    let count = u32le(d, decl - 8)? as usize;
+    if count == 0 || count > 100_000 {
+        return None;
+    }
+    let mut ar = CArchive::new_continuous(d, decl - 4, 0);
+    ar.ctx = crate::ctx::Ctx::of(d);
+    ar.calibrating = true;
+    let first_slot = ar.map.len();
+    let mut recs: Vec<(usize, String, Option<usize>)> = Vec::with_capacity(count);
+    for _ in 0..count {
+        match ar.read_object_expect("CMaterial") {
+            Ok(Child::Obj(i)) => match &ar.map[i] {
+                Slot::Object(Entity::Material { name, dib, .. }) => {
+                    let dib_slot = match dib {
+                        // An inline dib is the record's own next slot.
+                        Child::Obj(j) if *j > i => Some(*j),
+                        _ => None,
+                    };
+                    recs.push((i, name.clone(), dib_slot));
+                }
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    // The walk must end right before the layer list's `<u32> <u8>
+    // <count:u32>` preamble (§4): the CLayer new-class record within a
+    // few bytes.
+    let end = ar.pos;
+    let tail = d.get(end..(end + 24).min(d.len()))?;
+    let clayer = find(tail, b"\xff\xff\x02\x00\x06\x00CLayer")?;
+    if clayer < 8 {
+        return None;
+    }
+    let consumed = ar.map.len() - first_slot;
+    let abs_first = (base + 1).checked_sub(consumed)?;
+    if abs_first == 0 {
+        return None;
+    }
+    // throwaway index -> absolute: the CMaterial class landed on
+    // `first_slot` in the throwaway map and on `abs_first` in the file's.
+    let shift = |i: usize| i - first_slot + abs_first;
+    Some(
+        recs.into_iter()
+            .map(|(i, name, dib)| MatSlot {
+                rel: shift(i),
+                name,
+                dib_rel: dib.map(shift),
+            })
+            .collect(),
+    )
+}
+
 /// Walk the CMaterial region of `d`. Returns per-material relative slots,
 /// in file order, when the region parses record-adjacent END TO END
 /// (count records + 3-byte footer + a plausible layer count). `None` on
@@ -339,6 +407,47 @@ mod specs {
                 (12, Some(13)),
             ]
         );
+    }
+
+    /// The archive walk lands every material on the byte-scan walk's slot
+    /// under its unique anchor (house: material 0 at global slot 17), with
+    /// the same dib ownership — and on the third-party bathroom model the
+    /// byte-scan walk cannot parse (its first material carries V-Ray
+    /// attribute dictionaries) the archive walk still resolves.
+    #[test]
+    fn archive_walk_matches_anchored_region_walk() {
+        for file in [
+            "house.skp",
+            "box-two-materials.skp",
+            "material-one-face.skp",
+        ] {
+            let d = corpus(file);
+            let base = match crate::walk2::walk(&d) {
+                Ok(cw) => cw.base,
+                Err(e) => panic!(
+                    "{file} walks continuously ({} @0x{:x}: {})",
+                    e.stage, e.at, e.detail
+                ),
+            };
+            let region = walk_region(&d).unwrap();
+            let archive = walk_archive(&d, base).unwrap_or_else(|| panic!("{file} archive walk"));
+            assert_eq!(archive.len(), region.len(), "{file} record count");
+            let anchor = archive[0].rel - region[0].rel;
+            assert!(anchor > 0, "{file} anchor");
+            for (a, r) in archive.iter().zip(&region) {
+                assert_eq!(a.name, r.name, "{file} name order");
+                assert_eq!(a.rel, r.rel + anchor, "{file} slot of {}", a.name);
+                assert_eq!(
+                    a.dib_rel,
+                    r.dib_rel.map(|x| x + anchor),
+                    "{file} dib of {}",
+                    a.name
+                );
+            }
+        }
+        let house = corpus("house.skp");
+        let base = crate::walk2::walk(&house).ok().unwrap().base;
+        assert_eq!(walk_archive(&house, base).unwrap()[0].rel, 17);
     }
 
     /// The 10.7 MB production model: all 81 manager materials walk

@@ -33,7 +33,7 @@ pub(crate) struct Settings17 {
     font_index: std::collections::HashMap<usize, usize>,
 }
 
-pub(crate) fn read(d: &[u8], map: Option<&[Slot]>) -> Settings17 {
+pub(crate) fn read(d: &[u8], map: Option<&[Slot]>, layer_slots: &[usize]) -> Settings17 {
     let mut s = Settings17::default();
     let mut displayed = false;
     if let Some((camera, ro, base)) = document_view(d) {
@@ -59,7 +59,7 @@ pub(crate) fn read(d: &[u8], map: Option<&[Slot]>) -> Settings17 {
         .last()
         .and_then(|r| d.get(r.end + 12))
         .map(|&b| b != 0);
-    let found = scenes(d, &style_recs, &s.styles, displayed, map);
+    let found = scenes(d, &style_recs, &s.styles, displayed, map, layer_slots);
     let last_scene_end = found.last().map(|(_, end)| *end);
     s.scenes = found.into_iter().map(|(sc, _)| sc).collect();
     if let Some(map) = map {
@@ -353,10 +353,17 @@ fn watermark_at(d: &[u8], i: usize, background: bool) -> Option<(Watermark, usiz
 fn style_records(d: &[u8]) -> Vec<StyleRec> {
     let mut out = Vec::new();
     let mut i = 0;
+    // Preamble: null attribute pointer + pid field (mask 0 on authored
+    // files; third-party styles carry pids), then GUID, empty string,
+    // u32 3, name.
     while i + 30 <= d.len() {
-        if d[i..i + 3] == [0, 0, 0]
-            && d[i + 19..i + 27] == [0xff, 0xfe, 0xff, 0x00, 0x03, 0x00, 0x00, 0x00]
-            && d[i + 27..i + 30] == [0xff, 0xfe, 0xff]
+        let k = (d[i + 2] & 0x0f).count_ones() as usize;
+        if d[i] == 0
+            && d[i + 1] == 0
+            && d[i + 2] <= 0x0f
+            && d.get(i + 19 + k..i + 27 + k)
+                == Some(&[0xff, 0xfe, 0xff, 0x00, 0x03, 0x00, 0x00, 0x00][..])
+            && d.get(i + 27 + k..i + 30 + k) == Some(&[0xff, 0xfe, 0xff][..])
         {
             if let Some(r) = style_at(d, i) {
                 i = r.end;
@@ -370,13 +377,14 @@ fn style_records(d: &[u8]) -> Vec<StyleRec> {
 }
 
 fn style_at(d: &[u8], i: usize) -> Option<StyleRec> {
+    let k = (d.get(i + 2)? & 0x0f).count_ones() as usize;
     let guid: String = d
-        .get(i + 3..i + 19)?
+        .get(i + 3 + k..i + 19 + k)?
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let name = mfc_str_at(d, i + 27)?;
-    let j = mfc_str_end_at(d, i + 27)?;
+    let name = mfc_str_at(d, i + 27 + k)?;
+    let j = mfc_str_end_at(d, i + 27 + k)?;
     let description = mfc_str_at(d, j)?;
     let mut j = mfc_str_end_at(d, j)?;
     let n = u32le(d, j)?;
@@ -497,12 +505,25 @@ fn styles_of(
 /// referenced entities' persistent ids (when a map is available) and the
 /// end offset.
 fn ref_list(d: &[u8], at: usize, map: Option<&[Slot]>) -> Option<(Vec<u32>, usize)> {
+    let (slots, end) = ref_slots(d, at)?;
+    let ids = slots
+        .iter()
+        .filter_map(|&slot| match map?.get(slot)? {
+            Slot::Object(e) => e.pid(),
+            _ => None,
+        })
+        .collect();
+    Some((ids, end))
+}
+
+/// A counted list of object references as global map slots.
+fn ref_slots(d: &[u8], at: usize) -> Option<(Vec<usize>, usize)> {
     let n = u32le(d, at)?;
     if n > 0xFFFF {
         return None;
     }
     let mut i = at + 4;
-    let mut ids = Vec::new();
+    let mut slots = Vec::with_capacity(n as usize);
     for _ in 0..n {
         let tag = u16le(d, i)?;
         let (slot, next) = if tag == 0x7FFF {
@@ -510,14 +531,10 @@ fn ref_list(d: &[u8], at: usize, map: Option<&[Slot]>) -> Option<(Vec<u32>, usiz
         } else {
             ((tag & 0x7FFF) as usize, i + 2)
         };
-        if let Some(Slot::Object(e)) = map.and_then(|m| m.get(slot)) {
-            if let Some(pid) = e.pid() {
-                ids.push(pid);
-            }
-        }
+        slots.push(slot);
         i = next;
     }
-    Some((ids, i))
+    Some((slots, i))
 }
 
 /// Every CViewPage record (§10.10).
@@ -527,12 +544,25 @@ fn scenes(
     styles: &[Style],
     displayed: bool,
     map: Option<&[Slot]>,
+    layer_slots: &[usize],
 ) -> Vec<(Scene, usize)> {
     let mut out = Vec::new();
+    // The layer-list objects, list order, are `Model::layers` (model.rs);
+    // each definition's inline Layer0 copy is a separate map object.
+    // A page preamble: null attribute pointer, pid mask, pid bytes (§5.1;
+    // mask 0 on authored files, a pid on third-party models), then the
+    // name string marker.
     let mut i = 0;
     while i + 6 <= d.len() {
-        if d[i..i + 6] == [0, 0, 0, 0xff, 0xfe, 0xff] && viewpage_tag_before(d, i) {
-            if let Some((s, end)) = scene_at(d, i, style_recs, styles, displayed, map) {
+        let k = (d[i + 2] & 0x0f).count_ones() as usize;
+        if d[i] == 0
+            && d[i + 1] == 0
+            && d[i + 2] <= 0x0f
+            && d.get(i + 3 + k..i + 6 + k) == Some(&[0xff, 0xfe, 0xff][..])
+            && viewpage_tag_before(d, i)
+        {
+            if let Some((s, end)) = scene_at(d, i, style_recs, styles, displayed, map, layer_slots)
+            {
                 out.push((s, end));
                 i = end;
                 continue;
@@ -550,9 +580,11 @@ fn scene_at(
     styles: &[Style],
     doc_displayed: bool,
     map: Option<&[Slot]>,
+    layer_slots: &[usize],
 ) -> Option<(Scene, usize)> {
-    let name = mfc_str_at(d, i + 3)?;
-    let j = mfc_str_end_at(d, i + 3)?;
+    let pre = i + 3 + (d.get(i + 2)? & 0x0f).count_ones() as usize;
+    let name = mfc_str_at(d, pre)?;
+    let j = mfc_str_end_at(d, pre)?;
     let description = mfc_str_at(d, j)?;
     let mut j = mfc_str_end_at(d, j)?;
     let flags = u32le(d, j)?;
@@ -617,6 +649,7 @@ fn scene_at(
         j += 110;
     }
     let mut hidden_entities = Vec::new();
+    let mut hidden_layers = Vec::new();
     let mut active_section_planes = Vec::new();
     if flags & 16 != 0 {
         let (ids, end) = ref_list(d, j, map)?;
@@ -624,7 +657,12 @@ fn scene_at(
         j = end;
     }
     if flags & 32 != 0 {
-        let (_, end) = ref_list(d, j, map)?;
+        // Layers carry no pid on authored files: resolve by map slot.
+        let (slots, end) = ref_slots(d, j)?;
+        hidden_layers = slots
+            .iter()
+            .filter_map(|s| layer_slots.iter().position(|q| q == s))
+            .collect();
         j = end;
     }
     if flags & 64 != 0 {
@@ -636,12 +674,16 @@ fn scene_at(
     if anim > 1 {
         return None;
     }
-    // Two thumbnail flag bytes (`01 01` or `00 00`), then with a
-    // thumbnail a u8 (1), the PNG length and the PNG (§10.10).
+    // Thumbnail (§10.10): `00 00` none; `01 01` then u8 (1), the PNG
+    // length and the PNG; `01 00` then an object pointer to a thumbnail
+    // stored earlier (a third-party house).
     let has_thumb = *d.get(j + 19)?;
     let mut end = j + 21;
     if has_thumb == 1 {
-        end = j + 26 + u32le(d, j + 22)? as usize;
+        end = match *d.get(j + 20)? {
+            1 => j + 26 + u32le(d, j + 22)? as usize,
+            _ => object_ref(d, j + 21)?.1,
+        };
     }
     Some((
         Scene {
@@ -655,6 +697,7 @@ fn scene_at(
             axes,
             hidden_entities,
             active_section_planes,
+            hidden_layers,
             in_animation: anim != 0,
         },
         end,
@@ -690,70 +733,56 @@ fn annotations(map: &[Slot], s: &mut Settings17) {
         Child::Obj(i) => font_index.get(i).copied(),
         _ => None,
     };
-    let anchor = |kind: u32, p: [f64; 3]| Anchor {
+    let anchor = |kind: u32, p: [f64; 3], entity: &Child| Anchor {
         kind,
         point_m: if kind == 5 {
             [p[0], p[1] / INCH, p[2] / INCH]
         } else {
             m3(p)
         },
+        entity: match entity {
+            Child::Obj(slot) => match map.get(*slot) {
+                Some(Slot::Object(e)) => e.pid(),
+                _ => None,
+            },
+            _ => None,
+        },
     };
     for e in map {
         match e {
-            Slot::Object(Entity::Text {
-                pid,
-                content,
-                font,
-                screen_position,
-                anchor_kind,
-                anchor_point,
-                leader_offset,
-                leader,
-                arrow,
-                ..
-            }) => {
-                let leader_kind = match leader {
+            Slot::Object(Entity::Text { pid, body: t }) => {
+                let leader_kind = match t.leader {
                     1 => Leader::ViewBased,
                     2 => Leader::Pushpin,
                     _ => Leader::None,
                 };
                 s.texts.push(Text {
                     pid: *pid,
-                    content: content.clone(),
-                    screen_position: *screen_position,
-                    anchor: anchor(*anchor_kind, *anchor_point),
+                    content: t.content.clone(),
+                    screen_position: t.screen_position,
+                    anchor: anchor(t.anchor_kind, t.anchor_point, &t.anchor_entity),
                     leader_offset: if leader_kind == Leader::Pushpin {
-                        m3(*leader_offset)
+                        m3(t.leader_offset)
                     } else {
-                        *leader_offset
+                        t.leader_offset
                     },
                     leader: leader_kind,
-                    arrow: *arrow,
-                    font: font_of(font),
+                    arrow: t.arrow,
+                    font: font_of(&t.font),
                 });
             }
-            Slot::Object(Entity::Dimension {
-                pid,
-                text_override,
-                font,
-                anchors,
-                normal,
-                x_axis,
-                offset,
-                text_position,
-                aligned,
-            }) => {
+            Slot::Object(Entity::Dimension { pid, body: dm }) => {
                 s.dimensions.push(Dimension {
                     pid: *pid,
-                    text_override: text_override.clone(),
-                    start: anchor(anchors[0].0, anchors[0].1),
-                    end: anchor(anchors[1].0, anchors[1].1),
-                    normal: *normal,
-                    x_axis: *x_axis,
-                    offset_m: *offset / INCH,
-                    text_position: *text_position,
-                    aligned: *aligned,
-                    font: font_of(font),
+                    text_override: dm.text_override.clone(),
+                    start: anchor(dm.anchors[0].0, dm.anchors[0].1, &dm.anchors[0].2),
+                    end: anchor(dm.anchors[1].0, dm.anchors[1].1, &dm.anchors[1].2),
+                    normal: dm.normal,
+                    x_axis: dm.x_axis,
+                    offset_m: dm.offset / INCH,
+                    text_position: dm.text_position,
+                    aligned: dm.aligned,
+                    font: font_of(&dm.font),
                 });
             }
             _ => {}

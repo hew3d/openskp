@@ -11,7 +11,7 @@ use crate::settings::{
 use crate::{
     extract, geometry_runs_with_diagnostics, header, AttrValue, Attribute, Definition, Diagnostic,
     GeometryRun, Guide, Image, Instance, Layer, Material, PlacedInstance, RunFilterReason,
-    Topology, INCH,
+    SectionPlane, Topology, INCH,
 };
 
 /// Everything decoded from a `.skp` file.
@@ -102,6 +102,9 @@ pub struct Node {
     /// `CComponentInstance` (§4s class identity, as on [`Instance`]);
     /// `None` on the legacy byte-scan path, which cannot tell them apart.
     pub is_group: Option<bool>,
+    /// The placing object's GLOBAL map slot (§4s), the identity a scene's
+    /// hidden-entity list names; `None` on the legacy byte-scan path.
+    pub slot: Option<usize>,
     pub children: Vec<Node>,
 }
 
@@ -188,18 +191,27 @@ impl Model {
         }
         let hdr = header::parse_header(d).ok_or_else(|| Error("malformed .skp header".into()))?;
         match crate::walk2::walk(d) {
-            Ok(cw) => match Self::from_continuous(d, &hdr, &cw) {
-                Some(m) => Ok(m),
-                None => {
-                    let mut m = Self::parse_legacy(d, hdr)?;
-                    m.diagnostics.push(Diagnostic::ContinuousFallback {
-                        stage: "validation".into(),
-                        at: cw.end,
-                        detail: "completed walk failed the defref cross-check".into(),
-                    });
-                    Ok(m)
+            Ok(cw) => {
+                let end = cw.end;
+                match Self::from_continuous(d, &hdr, cw) {
+                    Some(m) => Ok(m),
+                    None => {
+                        let mut m = Self::parse_legacy(d, hdr)?;
+                        m.diagnostics.push(Diagnostic::ContinuousFallback {
+                            stage: "validation".into(),
+                            at: end,
+                            detail: "completed walk failed the defref cross-check".into(),
+                        });
+                        Ok(m)
+                    }
                 }
-            },
+            }
+            Err(f) if f.detail == crate::carchive::OUT_OF_MEMORY => Err(Error(format!(
+                "out of memory while reading the model section at 0x{:x} ({} bytes in): \
+                 the model is larger than this process can hold",
+                f.at,
+                d.len()
+            ))),
             Err(f) => {
                 let mut m = Self::parse_legacy(d, hdr)?;
                 m.diagnostics.push(Diagnostic::ContinuousFallback {
@@ -272,7 +284,7 @@ impl Model {
         let units = Units::from_attributes(&attributes);
         let animation = Animation::from_attributes(&attributes);
         let geo_located = geo_located(&attributes);
-        let s17 = crate::settings17::read(d, None);
+        let s17 = crate::settings17::read(d, None, &[]);
         Ok(Model {
             container: Container::Carchive2017,
             version: hdr.version,
@@ -313,14 +325,20 @@ impl Model {
     /// `None` when the result fails its cross-checks (a wrong calibration
     /// can complete mechanically but mislink — every instance def-ref must
     /// land on a definition object in the global map; house's 47 do).
+    /// Takes the walk by value: the global map (the parse's largest
+    /// allocation — 64 bytes per object, tens of millions of objects on a
+    /// production model) is released as soon as the meshes and instances
+    /// are built, before the material extractor copies every texture.
     fn from_continuous(
         d: &[u8],
         hdr: &header::Header,
-        cw: &crate::walk2::Continuous,
+        mut cw: crate::walk2::Continuous,
     ) -> Option<Model> {
         use crate::carchive::Slot;
         use crate::entity::Entity;
-        let map = &cw.map;
+        let owned_map = std::mem::take(&mut cw.map);
+        let map = &owned_map;
+        let cw = &cw;
 
         // Cross-check: every placed instance references a definition by its
         // ACTUAL global map slot (§4s; the "Birch Plywood" declared-index
@@ -373,16 +391,11 @@ impl Model {
         let mut definitions = Vec::with_capacity(cw.defs.len());
         let mut definition_links: Vec<(u32, usize)> = Vec::new();
         for ds in &cw.defs {
-            let Slot::Object(Entity::ComponentDef {
-                name,
-                guid,
-                behaviour,
-                timestamp,
-                ..
-            }) = &map[ds.slot]
-            else {
+            let Slot::Object(Entity::ComponentDef { meta, .. }) = &map[ds.slot] else {
                 return None;
             };
+            let (name, guid) = (&meta.name, &meta.guid);
+            let (behaviour, timestamp) = (&meta.behaviour, &meta.timestamp);
             if let Ok(slot) = u32::try_from(ds.slot) {
                 definition_links.push((slot, definitions.len()));
             }
@@ -438,8 +451,10 @@ impl Model {
                 mesh: crate::mesh::build_range(map, Some(1), lo, hi),
                 placed: map[lo.min(map.len())..hi.min(map.len())]
                     .iter()
-                    .filter_map(|s| match s {
+                    .enumerate()
+                    .filter_map(|(k, s)| match s {
                         Slot::Object(Entity::InstancePlaced {
+                            pid,
                             defref,
                             transform,
                             material,
@@ -448,8 +463,10 @@ impl Model {
                             is_group,
                             ..
                         }) => Some(PlacedInstance {
+                            pid: *pid,
+                            slot: Some(lo + k),
                             defref: *defref,
-                            transform: *transform,
+                            transform: **transform,
                             material: *material,
                             hidden: *hidden,
                             layer: *layer,
@@ -462,6 +479,19 @@ impl Model {
                     .iter()
                     .filter_map(|s| match s {
                         Slot::Object(Entity::Curve { members, .. }) => Some(*members),
+                        _ => None,
+                    })
+                    .collect(),
+                sections: map[lo.min(map.len())..hi.min(map.len())]
+                    .iter()
+                    .filter_map(|s| match s {
+                        Slot::Object(Entity::SectionPlane { pid, plane, hidden }) => {
+                            Some(SectionPlane {
+                                pid: *pid,
+                                plane: *plane,
+                                hidden: *hidden,
+                            })
+                        }
                         _ => None,
                     })
                     .collect(),
@@ -509,8 +539,9 @@ impl Model {
         // serialization order, linked by the def-ref = global slot.
         let round5 = |x: f64| (x * 1e5).round() / 1e5;
         let mut instances = Vec::new();
-        for entry in map.iter() {
+        for (slot, entry) in map.iter().enumerate() {
             if let Slot::Object(Entity::InstancePlaced {
+                pid,
                 defref,
                 transform,
                 name,
@@ -523,10 +554,14 @@ impl Model {
             }) = entry
             {
                 let definition = match map.get(*defref as usize) {
-                    Some(Slot::Object(Entity::ComponentDef { name, .. })) => Some(name.clone()),
+                    Some(Slot::Object(Entity::ComponentDef { meta, .. })) => {
+                        Some(meta.name.clone())
+                    }
                     _ => None,
                 };
                 instances.push(Instance {
+                    pid: *pid,
+                    slot: Some(slot),
                     definition,
                     defref: *defref,
                     offset: *tf_at,
@@ -535,7 +570,7 @@ impl Model {
                         round5(transform[10] / INCH),
                         round5(transform[11] / INCH),
                     ],
-                    transform: *transform,
+                    transform: **transform,
                     name: Some(name.clone()),
                     is_group: Some(*is_group),
                     material: Some(*material),
@@ -545,6 +580,9 @@ impl Model {
             }
         }
 
+        let s17 = crate::settings17::read(d, Some(map), &cw.layer_slots);
+        // Everything below reads the file, not the map: free it first.
+        drop(owned_map);
         // Materials: content still comes from the byte-scan extractor;
         // BINDING is the §4s slot arithmetic, validated against the
         // observed matrefs (fallback = the documented §4n suffix zip).
@@ -553,7 +591,6 @@ impl Model {
         let (mut materials, shared_refs) = extract::materials(d);
         let (material_links, mut diagnostics) =
             continuous_material_links(d, &mut materials, &shared_refs, cw.base, &geometry);
-
         diagnostics.insert(0, Diagnostic::ContinuousWalk { base: cw.base });
         diagnostics.extend(
             cw.bound
@@ -568,7 +605,6 @@ impl Model {
         let units = Units::from_attributes(&attributes);
         let animation = Animation::from_attributes(&attributes);
         let geo_located = geo_located(&attributes);
-        let s17 = crate::settings17::read(d, Some(map));
         Some(Model {
             container: Container::Carchive2017,
             version: hdr.version.clone(),
@@ -627,6 +663,7 @@ impl Model {
                     i.hidden.unwrap_or(false),
                     i.layer.unwrap_or(0),
                     i.is_group,
+                    i.slot,
                     0,
                 )
             })
@@ -643,6 +680,7 @@ impl Model {
         hidden: bool,
         layer: u16,
         is_group: Option<bool>,
+        slot: Option<usize>,
         depth: u32,
     ) -> Node {
         let world = mat_mul(parent, &mat_of(local));
@@ -675,6 +713,7 @@ impl Model {
                             p.hidden,
                             p.layer,
                             Some(p.is_group),
+                            p.slot,
                             depth + 1,
                         )
                     })
@@ -693,6 +732,7 @@ impl Model {
             hidden,
             layer,
             is_group,
+            slot,
             children,
         }
     }
@@ -765,6 +805,8 @@ impl Model {
         j.key("instances");
         j.arr(&self.instances, |j, inst| {
             j.begin_obj();
+            j.key("pid");
+            j.raw_usize(inst.pid as usize);
             j.key("definition");
             match &inst.definition {
                 Some(s) => j.raw_str(s),
@@ -1302,8 +1344,27 @@ fn continuous_material_links(
     // order — the signature extractor can miss a record the walk finds
     // (its slot then simply links to no material), and duplicate names
     // stay unambiguous because both sequences are file-ordered.
-    if let Some(slots) = crate::matwalk::walk_region(d) {
-        if let Some(links) = crate::matwalk::links_from_walk(&slots, &refs, base + 1) {
+    // Exact-exact path first: the archive walk yields ABSOLUTE slots and
+    // needs no anchoring — only the check that every face ref lands on a
+    // material. Then the byte-scan walk with its unique-shift anchor.
+    let archive = crate::matwalk::walk_archive(d, base).and_then(|slots| {
+        let set: std::collections::BTreeSet<usize> = slots.iter().map(|s| s.rel).collect();
+        refs.iter().all(|&r| set.contains(&(r as usize))).then(|| {
+            let links: Vec<(u16, usize)> = slots
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| u16::try_from(s.rel).ok().map(|r| (r, i)))
+                .collect();
+            (slots, links)
+        })
+    });
+    let walked = archive.or_else(|| {
+        let slots = crate::matwalk::walk_region(d)?;
+        let links = crate::matwalk::links_from_walk(&slots, &refs, base + 1)?;
+        Some((slots, links))
+    });
+    if let Some((slots, links)) = walked {
+        {
             fn name_of(m: &Material) -> &str {
                 match m {
                     Material::Solid { name, .. } => name,
@@ -1636,6 +1697,8 @@ fn scene_json(j: &mut Json, s: &Scene) {
     j.arr(&s.hidden_entities, |j, id| j.raw_usize(*id as usize));
     j.key("active_section_planes");
     j.arr(&s.active_section_planes, |j, id| j.raw_usize(*id as usize));
+    j.key("hidden_layers");
+    j.arr(&s.hidden_layers, |j, i| j.raw_usize(*i));
     j.m_bool("in_animation", s.in_animation);
     j.end_obj();
 }
@@ -1645,6 +1708,8 @@ fn anchor_json(j: &mut Json, a: &crate::settings::Anchor) {
     j.m_usize("kind", a.kind as usize);
     j.key("point_m");
     j.f64_arr(&a.point_m);
+    j.key("entity");
+    opt_index(j, a.entity.map(|e| e as usize));
     j.end_obj();
 }
 
@@ -1903,6 +1968,7 @@ mod tests {
             },
             placed: vec![],
             curve_members: vec![],
+            sections: vec![],
         }];
         let mut materials: Vec<Material> = Vec::new();
         let shared_refs = vec![(0usize, 7u16)];
@@ -1982,6 +2048,7 @@ mod tests {
             },
             placed: vec![],
             curve_members: vec![],
+            sections: vec![],
         }];
         // One solid material (no inline dib) placed at slot 1 by the
         // arithmetic model (base 1 -> first = (1+1) - (1+0) = 1); the

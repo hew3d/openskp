@@ -58,6 +58,7 @@ fn cube_survives_a_definition_full_of_unknowns() {
     assert_eq!(
         outer.placed,
         vec![openskp::PlacedInstance {
+            pid: outer.placed[0].pid,
             defref: 22,
             transform: outer.placed[0].transform,
             material: 0,
@@ -66,6 +67,7 @@ fn cube_survives_a_definition_full_of_unknowns() {
             // mixed-definition nests a COMPONENT instance (the 0.5 box
             // definition), not a group.
             is_group: false,
+            slot: outer.placed[0].slot,
         }],
         "the nested instance places the 0.5 box definition (declared idx 22)"
     );

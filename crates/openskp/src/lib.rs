@@ -66,6 +66,9 @@ pub struct Definition {
 /// A placed component/group instance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instance {
+    /// Persistent id of the placing object — the identity a scene's
+    /// `hidden_entities` names; 0 on the legacy byte-scan path.
+    pub pid: u32,
     /// Name of the definition this instance places (if resolvable).
     pub definition: Option<String>,
     /// The referenced definition's declared map index (§4h; on the
@@ -94,6 +97,9 @@ pub struct Instance {
     pub hidden: Option<bool>,
     /// §4q drawbase layer slot; `None` on the legacy byte-scan path.
     pub layer: Option<u16>,
+    /// The placing object's GLOBAL map slot (§4s); `None` on the legacy
+    /// byte-scan path.
+    pub slot: Option<usize>,
 }
 
 /// A material. `.skp` distinguishes solid from textured by on-disk shape.
@@ -133,6 +139,20 @@ pub struct Layer {
     pub rgba: [u8; 4],
 }
 
+/// A section plane (`CSectionPlane`, §10.3) as placed in its owning
+/// entity list, in that list's LOCAL frame (the model's for the root run,
+/// the definition's for a definition run): the stored `[A, B, C, D]` with
+/// the unit normal `(A, B, C)` and the offset `D` in inches, so a point
+/// `p` (inches) lies on the plane when `A·x + B·y + C·z + D = 0`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionPlane {
+    /// Persistent id — the identity a scene's `active_section_planes`
+    /// names.
+    pub pid: u32,
+    pub plane: [f64; 4],
+    pub hidden: bool,
+}
+
 /// A construction line (guide): a point + unit direction, point in metres.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Guide {
@@ -169,6 +189,9 @@ pub struct Image {
 /// `GeometryRun::def_index`) and its 13-f64 transform.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedInstance {
+    /// Persistent id of the placing object — the identity a scene's
+    /// `hidden_entities` names; 0 on the legacy byte-scan path.
+    pub pid: u32,
     pub defref: u32,
     pub transform: [f64; 13],
     /// `true` = a `CGroup` placement, `false` = a `CComponentInstance`
@@ -184,6 +207,9 @@ pub struct PlacedInstance {
     /// §4q drawbase layer slot (0 = default layer); an instance on a
     /// hidden layer is not displayed/exported.
     pub layer: u16,
+    /// The placing object's GLOBAL map slot (§4s); `None` on the legacy
+    /// byte-scan path.
+    pub slot: Option<usize>,
 }
 
 /// Resolved concrete topology of one geometry run (a box → 8/12/6).
@@ -238,6 +264,9 @@ pub struct GeometryRun {
     /// member-edge count of each, serialization order. Continuous-path
     /// only (the legacy walk never decodes CCurve bodies).
     pub curve_members: Vec<u32>,
+    /// Section planes placed in the run, serialization order (§10.3), in
+    /// the run's local frame. Continuous-path only.
+    pub sections: Vec<SectionPlane>,
 }
 
 /// A recorded parse anomaly (Phase 0.4). Clean 2013–2017 files parse with
@@ -427,6 +456,7 @@ pub fn geometry_runs_with_diagnostics(d: &[u8]) -> (Vec<GeometryRun>, Vec<Diagno
                 .iter()
                 .filter_map(|s| match s {
                     carchive::Slot::Object(entity::Entity::InstancePlaced {
+                        pid,
                         defref,
                         transform,
                         material,
@@ -435,8 +465,10 @@ pub fn geometry_runs_with_diagnostics(d: &[u8]) -> (Vec<GeometryRun>, Vec<Diagno
                         is_group,
                         ..
                     }) => Some(PlacedInstance {
+                        pid: *pid,
+                        slot: None,
                         defref: *defref,
-                        transform: *transform,
+                        transform: **transform,
                         material: *material,
                         hidden: *hidden,
                         layer: *layer,
@@ -446,6 +478,7 @@ pub fn geometry_runs_with_diagnostics(d: &[u8]) -> (Vec<GeometryRun>, Vec<Diagno
                 })
                 .collect(),
             curve_members: Vec::new(), // legacy walk never decodes CCurve
+            sections: Vec::new(),
         });
     }
     (out, diagnostics)

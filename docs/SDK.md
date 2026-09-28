@@ -39,8 +39,8 @@ println!("{} ({} definitions, {} materials)",
 | `version`, `model_guid` | header identification (`model_guid` is `None` outside the 2013–2017 container) |
 | `container` | which file layout the model was read from: `Container::Carchive2017` or `Container::Zip` |
 | `definitions` | component/group definitions (`name`, `guid`, map slot, `behaviour`, `timestamp`) |
-| `instances` | placements: definition ref, 13-value transform, name |
-| `geometry` | per-definition/root `GeometryRun`s: resolved `Topology` counts, a materialized `Mesh`, child `PlacedInstance`s |
+| `instances` | placements: persistent id (`pid`), definition ref, 13-value transform, name, global store-map `slot` |
+| `geometry` | per-definition/root `GeometryRun`s: resolved `Topology` counts, a materialized `Mesh`, child `PlacedInstance`s, placed `SectionPlane`s |
 | `materials`, `layers`, `guides`, `attributes`, `images` | appearance and document data |
 | `scenes` | the document's named views, as typed `Scene`s (see below) |
 | `camera`, `rendering`, `shadows`, `units` | the current view and document settings: `Camera`, `RenderingOptions`, `ShadowInfo`, `Units` |
@@ -64,6 +64,15 @@ for run in &model.geometry {
     println!("v={} e={} f={}", t.vertices, t.edges, t.faces);
 }
 ```
+
+Each `Instance`/`PlacedInstance` carries the placing object's persistent
+id (`pid`) — the join key into `Scene::hidden_entities` — and, on the
+2017 continuous walk, its global store-map `slot`; `slot` is `None` on
+the legacy byte-scan path and on post-2017 files, and `pid` is `0` on
+the legacy path. `GeometryRun` also carries `sections: Vec<SectionPlane>`
+— the section planes placed directly in that run, in the run's LOCAL
+frame (unit normal `plane[0..3]`, offset `plane[3]`, inches), read on
+both containers; `Scene::active_section_planes` names them by `pid`.
 
 ### World space and UVs
 
@@ -136,12 +145,15 @@ fields when the corresponding attributes are absent.
 `Vec<Scene>`: each `Scene` carries its name, description, which parts
 it saves (`Scene::saved: SceneProperties`), and the saved parts
 themselves (`camera`, `rendering`, `style`, `shadows`, `axes`,
-`hidden_entities`, `active_section_planes`, `in_animation`) — present
-exactly when `saved` reports that property. Code that only read scene
-names now reads `scene.name` on each `Scene`.
+`hidden_entities`, `active_section_planes`, `hidden_layers`,
+`in_animation`) — present exactly when `saved` reports that property.
+`hidden_layers` holds indices into `Model::layers` (2017 layout:
+`docs/SKP_FORMAT.md` §10.10; post-2017: §16.15). Code that only read
+scene names now reads `scene.name` on each `Scene`.
 
 `Text` and `Dimension` are annotation entities (persistent id, an
-`Anchor` — what they're attached to — and a `font` index into
+`Anchor` — what they're attached to: kind, point, and the anchored
+entity's persistent id when one is stored — and a `font` index into
 `Model::fonts`); `Definition` gained `behaviour: Behaviour` (glue,
 cuts-opening, camera-facing, shadow flags) and `timestamp` (the
 definition's last-edit time, UNIX seconds, 0 when unavailable).
@@ -150,8 +162,10 @@ The 2017 **legacy byte-scan path** — used only when the continuous walk
 fails and recorded as a diagnostic when it triggers — cannot resolve
 these as fully as the continuous path: it leaves `texts`, `dimensions`,
 and `fonts` empty, and scene entity-id lists (`hidden_entities`,
-`active_section_planes`) empty. `camera`, `rendering`, `shadows`,
-`units`, `styles`, `watermarks`, `axes`, `text_defaults`,
+`active_section_planes`, `hidden_layers`) empty. Instances and placed
+components on this path carry `pid = 0` and `slot = None`, since it
+cannot resolve persistent ids or global map slots. `camera`, `rendering`,
+`shadows`, `units`, `styles`, `watermarks`, `axes`, `text_defaults`,
 `dimension_defaults`, `anti_aliased_textures`, `animation`, and
 `geo_located` are unaffected, except that the `font` index inside
 `text_defaults`/`dimension_defaults` comes back `None` unless the tail
@@ -162,7 +176,14 @@ map, which this path doesn't have).
 
 `Model::parse` fails only when the container is unrecognized or damaged
 (a post-2017 archive whose entries fail their CRC-32, or whose records
-do not tile). Everything else parses; anomalies are
+do not tile), or when the process cannot allocate the continuous walk's
+in-memory store map for a very large 2017 file. That case returns an
+`Error` naming the file size instead of aborting the process — relevant
+to hosts with a fixed memory budget, such as wasm — with a message of
+the form `"out of memory while reading the model section at 0x… (N
+bytes in): the model is larger than this process can hold"`; the store
+map itself is released before texture extraction, to keep the peak
+below the model's final resident size. Everything else parses; anomalies are
 never silent — they land in `model.diagnostics` (resyncs, skipped
 records, filtered runs, fallback decisions). `openskp::header_info`
 identifies any SketchUp file's version (and, for 2013–2017 files, its
@@ -225,10 +246,11 @@ as consumers need them.
 ### The JSON surfaces
 
 `openskp_model_json` / `Model::to_json` emit the document: version, GUID,
-definitions (name, guid, timestamp, behaviour), instances, geometry-run
-topology, materials (with texture metadata), layers, scenes (name,
-description, saved-property bits, camera, rendering, style name,
-shadows, axes, hidden-entity and active-section-plane id lists,
+definitions (name, guid, timestamp, behaviour), instances (persistent
+id, definition, translation, group flag), geometry-run topology,
+materials (with texture metadata), layers, scenes (name, description,
+saved-property bits, camera, rendering, style name, shadows, axes,
+hidden-entity, active-section-plane and hidden-layer index lists,
 in-animation flag), guides, attributes, images, the document's
 `camera`, `rendering`, `shadows`, `units`, `axes`, `text_defaults`,
 `dimension_defaults`, `anti_aliased_textures`, `animation`, and

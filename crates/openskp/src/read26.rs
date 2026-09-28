@@ -16,7 +16,7 @@ use crate::model::{Error, Model};
 use crate::zip::Archive;
 use crate::{
     AttrValue, Attribute, Definition, Diagnostic, FaceTexture, GeometryRun, Guide, Image, Instance,
-    Layer, Material, Mesh, MeshEdge, MeshFace, PlacedInstance, Topology, INCH,
+    Layer, Material, Mesh, MeshEdge, MeshFace, PlacedInstance, SectionPlane, Topology, INCH,
 };
 
 const M_PER_INCH: f64 = 0.0254;
@@ -137,6 +137,8 @@ const IMAGES: u16 = 0x1390;
 const GUIDE_LINES: u16 = 0x1391;
 const GUIDE_POINTS: u16 = 0x1392;
 const SECTION_PLANES: u16 = 0x1393;
+const SECTION_PLANE: u16 = 0x445C; // §16.4: drawing element + plane + name + symbol
+const SECTION_PLANE_EQ: u16 = 0x445D; // 4 f64: A, B, C, D
 const PLAIN_CURVES: u16 = 0x1396;
 const ARC_CURVES: u16 = 0x1397;
 const TEXTS: u16 = 0x1398;
@@ -496,6 +498,17 @@ fn container(
             });
         }
     }
+    let mut sections = Vec::new();
+    if let Some(pool) = n.node(SECTION_PLANES)? {
+        for sp in pool.nodes(SECTION_PLANE)? {
+            let h = drawing(&sp)?;
+            sections.push(SectionPlane {
+                pid: h.id,
+                plane: f64s(sp.get(SECTION_PLANE_EQ), sp.at)?,
+                hidden: h.flags & 0x01 != 0,
+            });
+        }
+    }
     let (mut loops, mut uses) = (0usize, 0usize);
     let mut faces = Vec::new();
     if let Some(pool) = n.node(FACES)? {
@@ -552,7 +565,7 @@ fn container(
                 back_material: s.material(uint(f.get(FACE_BACK_MATERIAL))),
                 hidden: h.flags & 0x01 != 0,
                 layer: s.layer(h.layer),
-                texture: texture(h.attrs)?,
+                texture: texture(h.attrs)?.map(Box::new),
             });
         }
     }
@@ -566,6 +579,8 @@ fn container(
         sat += usize::from(s.definition_name.contains_key(&defref));
         let t: [f64; 13] = f64s(x.get(INSTANCE_TRANSFORM), x.at)?;
         let p = PlacedInstance {
+            pid: h.id,
+            slot: None,
             defref,
             transform: t,
             is_group,
@@ -612,6 +627,7 @@ fn container(
         run: GeometryRun {
             start,
             end,
+            sections,
             top_level: top,
             frame: Some(top),
             def_index: def.map(|d| d as usize),
@@ -809,6 +825,8 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
     let mut take = |b: Built, geometry: &mut Vec<GeometryRun>| {
         for (p, at, name) in b.instances {
             instances.push(Instance {
+                pid: p.pid,
+                slot: None,
                 definition: slots.definition_name.get(&p.defref).cloned(),
                 defref: p.defref,
                 offset: at,
@@ -876,7 +894,12 @@ pub(crate) fn parse(d: &[u8], version: String) -> Result<Model, Error> {
         None => None,
     };
     let st = crate::settings26::styles(&top, &zip)?;
-    let scenes = crate::settings26::scenes(&top, &st.names)?;
+    let layer_index: HashMap<u32, usize> = slots
+        .layer
+        .iter()
+        .map(|(id, i)| (*id, *i as usize - 1))
+        .collect();
+    let scenes = crate::settings26::scenes(&top, &st.names, &layer_index)?;
     let axes = match top.node(0x01FC)? {
         Some(a) => Some(crate::settings26::axes(&a.need(0x4650)?)?),
         None => None,

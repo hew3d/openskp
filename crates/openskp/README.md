@@ -40,8 +40,11 @@ identifies any `.skp` from its header alone.
 **Supported:** SketchUp's 2017 classic binary format (internally
 versioned `{17.x}`), the format of the last free desktop edition, and the
 post-2017 ZIP container that current releases save (observed: SketchUp
-2026, `{26.x}`; 2018–2025 untested). Both produce the same `Model`.
-Writing `.skp` is not supported.
+2026, `{26.x}`; 2018–2025 untested). Both produce the same `Model`. The
+continuous walk reads production-scale 2017 models well beyond the
+corpus — multi-hundred-megabyte third-party files — with no desync;
+a process too small to hold the model gets a named out-of-memory error
+instead of aborting. Writing `.skp` is not supported.
 
 See [`docs/SDK.md`](https://github.com/hew3d/openskp/blob/main/docs/SDK.md)
 for the full guide, and the companion crates

@@ -94,7 +94,15 @@ fn matches_python_reference() {
         // and scene_dae.rs (.dae-validated world positions).
         let mut exp = expected.clone();
         let mut act = got.clone();
-        for k in ["geometry_runs", "diagnostics", "definitions", "instances"] {
+        // `camera` postdates the frozen Python oracle; scenes are compared
+        // by name below, the only form the oracle knows.
+        for k in [
+            "geometry_runs",
+            "diagnostics",
+            "definitions",
+            "instances",
+            "camera",
+        ] {
             exp.as_object_mut().unwrap().remove(k);
             act.as_object_mut().unwrap().remove(k);
         }

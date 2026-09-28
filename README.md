@@ -101,7 +101,10 @@ cargo test --workspace --release     # the acceptance suite
   (`{26.x}`), the format current releases, including the free web app,
   save. Each 2026 corpus file reads equivalent to its 2017 original in
   geometry, scene, materials, layers, UVs, scenes, guides, and document
-  settings.
+  settings. The continuous walk also reads production-scale 2017 models
+  well beyond the corpus — multi-hundred-megabyte third-party files —
+  with no desync; a process that cannot hold the model gets a named
+  out-of-memory error instead of aborting.
 - **Untested:** releases 2018–2025 are unobserved; files in the ZIP
   container are read by the 2026 reader.
 - **Identified but degraded:** 2013–2016 saves parse header-level with

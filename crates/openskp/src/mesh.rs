@@ -40,10 +40,12 @@ pub struct MeshFace {
     pub layer: u16,
     /// The face's `CFaceTextureCoords`, when it has one (§4u/§4v).
     /// A painted side WITHOUT one uses the identity placement.
-    pub texture: Option<FaceTexture>,
+    pub texture: Option<Box<FaceTexture>>,
 }
 
-/// Per-face texture placement (§4v): each side holds a row-major 3×3
+/// Per-face texture placement (§4v), boxed on the face — a few faces in a
+/// million carry one, and the inline block would otherwise be most of
+/// every face's footprint. Each side holds a row-major 3×3
 /// PROJECTIVE matrix mapping texture space (inches) to the face-local frame
 /// (`[t_u, t_v, 1] · K`, row-vector convention), plus the §4u pin lists.
 #[derive(Debug, Clone)]
@@ -298,27 +300,17 @@ pub(crate) fn build_range(map: &[Slot], base: Option<i64>, lo: usize, hi: usize)
             return None;
         };
         children.iter().find_map(|c| {
-            let Slot::Object(Entity::FaceTextureCoords {
-                front,
-                front_extra,
-                back,
-                back_extra,
-                front_pins,
-                back_pins,
-                flags,
-                ..
-            }) = &map[deref(c)?]
-            else {
+            let Slot::Object(Entity::FaceTextureCoords { ftc, .. }) = &map[deref(c)?] else {
                 return None;
             };
             Some(FaceTexture {
-                front: *front,
-                back: *back,
-                front_extra: *front_extra,
-                back_extra: *back_extra,
-                front_pins: front_pins.clone(),
-                back_pins: back_pins.clone(),
-                flags: *flags,
+                front: ftc.front,
+                back: ftc.back,
+                front_extra: ftc.front_extra,
+                back_extra: ftc.back_extra,
+                front_pins: ftc.front_pins.clone(),
+                back_pins: ftc.back_pins.clone(),
+                flags: ftc.flags,
             })
         })
     };
@@ -373,7 +365,7 @@ pub(crate) fn build_range(map: &[Slot], base: Option<i64>, lo: usize, hi: usize)
             back_material: (*back_material != 0).then_some(*back_material),
             hidden: *hidden,
             layer: *layer,
-            texture: texture_of(attrs),
+            texture: texture_of(attrs).map(Box::new),
         });
     }
     mesh

@@ -370,6 +370,16 @@ fn font_of(m: &Model, i: Option<usize>) -> Option<openskp::Font> {
     i.map(|i| m.fonts[i].clone())
 }
 
+/// Anchored-entity ids match when the file's ids survived the conversion;
+/// otherwise only their presence can be compared.
+fn same_anchor_entity(x: Option<u32>, y: Option<u32>, same_ids: bool, what: &str) {
+    if same_ids {
+        assert_eq!(x, y, "{what}: anchor entity");
+    } else {
+        assert_eq!(x.is_some(), y.is_some(), "{what}: anchor entity");
+    }
+}
+
 fn close(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol
 }
@@ -541,6 +551,14 @@ fn every_2026_file_reads_the_same_settings_as_its_2017_original() {
             assert_eq!(sa.saved.0 & 0x7F, sb.saved.0 & 0x7F, "{what}: saved");
             assert_eq!(sa.in_animation, sb.in_animation, "{what}: animation");
             assert_eq!(sa.style, sb.style, "{what}: style");
+            let layer_names = |m: &Model, idx: &[usize]| -> Vec<String> {
+                idx.iter().map(|&i| m.layers[i].name.clone()).collect()
+            };
+            assert_eq!(
+                layer_names(&a, &sa.hidden_layers),
+                layer_names(&b, &sb.hidden_layers),
+                "{what}: hidden layers"
+            );
             match (&sa.camera, &sb.camera) {
                 (Some(x), Some(y)) => same_camera(x, y, &what),
                 (None, None) => {}
@@ -576,6 +594,12 @@ fn every_2026_file_reads_the_same_settings_as_its_2017_original() {
         }
 
         // Annotations, matched by content (house-plus's ids are renumbered).
+        // Persistent ids survive the conversion unless the 2017 file held
+        // duplicates, in which case the converter renumbers (house-plus).
+        let instance_pids = |m: &Model| -> std::collections::BTreeSet<u32> {
+            m.instances.iter().map(|i| i.pid).collect()
+        };
+        let same_ids = instance_pids(&a) == instance_pids(&b);
         let texts = |m: &Model| -> BTreeMap<String, openskp::Text> {
             m.texts
                 .iter()
@@ -601,6 +625,7 @@ fn every_2026_file_reads_the_same_settings_as_its_2017_original() {
                 "{what}: screen y"
             );
             assert_eq!(x.anchor.kind, y.anchor.kind, "{what}: anchor kind");
+            same_anchor_entity(x.anchor.entity, y.anchor.entity, same_ids, &what);
             assert!(
                 close3(x.anchor.point_m, y.anchor.point_m, 1e-6),
                 "{what}: anchor point"
@@ -631,6 +656,7 @@ fn every_2026_file_reads_the_same_settings_as_its_2017_original() {
             assert_eq!(x.text_override, y.text_override, "{what}");
             for (p, q) in [(&x.start, &y.start), (&x.end, &y.end)] {
                 assert_eq!(p.kind, q.kind, "{what}: anchor kind");
+                same_anchor_entity(p.entity, q.entity, same_ids, &what);
                 assert!(close3(p.point_m, q.point_m, 1e-6), "{what}: anchor point");
             }
             assert!(close3(x.normal, y.normal, 1e-9), "{what}: normal");
@@ -640,6 +666,19 @@ fn every_2026_file_reads_the_same_settings_as_its_2017_original() {
             assert_eq!(x.aligned, y.aligned, "{what}: aligned");
             assert_eq!(font_of(&a, x.font), font_of(&b, y.font), "{what}: font");
         }
+
+        // Section planes: the same planes, in the same local frames.
+        let planes = |m: &Model| -> Vec<[i64; 4]> {
+            let mut v: Vec<[i64; 4]> = m
+                .geometry
+                .iter()
+                .flat_map(|r| r.sections.iter())
+                .map(|s| s.plane.map(|x| (x * 1e6).round() as i64))
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(planes(&a), planes(&b), "{new}: section planes");
 
         // Definitions: behaviour and timestamp, by name.
         let defs = |m: &Model| -> BTreeMap<String, (openskp::Behaviour, u32)> {
